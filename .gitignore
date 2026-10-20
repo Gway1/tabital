@@ -1,7 +1,11 @@
 # Secrets and local config
 .env
 .env.*
+venv
+.venv
 !.env.example
+
+reports/
 
 # Local databases and uploads
 instance/
@@ -11,6 +15,7 @@ uploads/
 
 # Python
 __pycache__/
+.pytest_cache
 *.py[cod]
 .venv/
 venv/
