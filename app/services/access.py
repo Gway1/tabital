@@ -20,20 +20,22 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 # Changes an operations admin may make
 OPERATIONS_WRITES = [
-    re.compile(r"^/admin/collection/\d+/reminder$"),       # collections reminder (SMS / in-app)
-    re.compile(r"^/admin/customers/\d+/note$"),            # a note on the customer's file
-    re.compile(r"^/notifications(/|$)"),                   # their own notifications
+    re.compile(
+        r"^/admin/collection/\d+/reminder$"
+    ),  # collections reminder (SMS / in-app)
+    re.compile(r"^/admin/customers/\d+/note$"),  # a note on the customer's file
+    re.compile(r"^/notifications(/|$)"),  # their own notifications
 ]
 
 # Reads that are highly sensitive: full personal data, business financials, rates, bulk exports
 MANAGEMENT_READS = [
     re.compile(r"^/admin/pii/"),
     re.compile(r"^/admin/economics/"),
-    re.compile(r"^/admin/reports/"),                       # revenue and KPIs: business financials
+    re.compile(r"^/admin/reports/"),  # revenue and KPIs: business financials
     re.compile(r"^/admin/business-settings"),
     re.compile(r"^/admin/settings/"),
     re.compile(r"^/admin/team"),
-    re.compile(r"/export$"),                               # CSV exports aren't masked
+    re.compile(r"/export$"),  # CSV exports aren't masked
     re.compile(r"^/admin/reports/download$"),
 ]
 

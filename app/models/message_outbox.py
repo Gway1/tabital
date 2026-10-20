@@ -5,17 +5,21 @@ from ..extensions import db
 
 
 class MessageOutbox(db.Model):
-    __tablename__ = 'message_outbox'
+    __tablename__ = "message_outbox"
 
-    PENDING = 'pending'
-    SENT = 'sent'
-    FAILED = 'failed'
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
 
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    channel = db.Column(db.String(20), nullable=False)          # sms, whatsapp, in_app
-    to_address = db.Column(db.String(50))                        # phone in +233 format for sms/whatsapp
-    template = db.Column(db.String(40), nullable=False)          # due_in_3, due_today, late_fee_charged, ...
+    user_id = db.Column(
+        db.Integer, db.ForeignKey("users.id"), nullable=False, index=True
+    )
+    channel = db.Column(db.String(20), nullable=False)  # sms, whatsapp, in_app
+    to_address = db.Column(db.String(50))  # phone in +233 format for sms/whatsapp
+    template = db.Column(
+        db.String(40), nullable=False
+    )  # due_in_3, due_today, late_fee_charged, ...
     title = db.Column(db.String(200))
     body = db.Column(db.Text, nullable=False)
     status = db.Column(db.String(20), nullable=False, default=PENDING, index=True)
@@ -25,8 +29,12 @@ class MessageOutbox(db.Model):
     provider_message_id = db.Column(db.String(100))
     # Prevents the same reminder going out twice (e.g. the daily job ran twice)
     dedupe_key = db.Column(db.String(120), unique=True, nullable=False)
-    plan_id = db.Column(db.Integer, db.ForeignKey('instalment_plans.id'), nullable=True, index=True)
-    payment_id = db.Column(db.Integer, db.ForeignKey('instalment_payments.id'), nullable=True)
+    plan_id = db.Column(
+        db.Integer, db.ForeignKey("instalment_plans.id"), nullable=True, index=True
+    )
+    payment_id = db.Column(
+        db.Integer, db.ForeignKey("instalment_payments.id"), nullable=True
+    )
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     sent_at = db.Column(db.DateTime)
 

@@ -25,8 +25,9 @@ def save_authorization(customer_id, email, data):
     signature = auth.get("signature")
     existing = None
     if signature:
-        existing = PaymentMethod.query.filter_by(customer_id=customer_id, signature=signature,
-                                                 revoked_at=None).first()
+        existing = PaymentMethod.query.filter_by(
+            customer_id=customer_id, signature=signature, revoked_at=None
+        ).first()
     method = existing or PaymentMethod(customer_id=customer_id, signature=signature)
     method.authorization_code = auth["authorization_code"]
     method.email = email
@@ -39,7 +40,9 @@ def save_authorization(customer_id, email, data):
     method.reusable = True
     if existing is None:
         # The newest card becomes the default; autopay stays off until the customer opts in
-        for other in PaymentMethod.query.filter_by(customer_id=customer_id, revoked_at=None).all():
+        for other in PaymentMethod.query.filter_by(
+            customer_id=customer_id, revoked_at=None
+        ).all():
             other.is_default = False
         method.is_default = True
         method.autopay_enabled = False
@@ -61,20 +64,30 @@ def run(today=None):
     if not paystack.is_configured():
         return 0
     today = today or datetime.utcnow().date()
-    retry_days = SystemSetting.get_value("autopay_retry_days", None) or DEFAULT_RETRY_DAYS
+    retry_days = (
+        SystemSetting.get_value("autopay_retry_days", None) or DEFAULT_RETRY_DAYS
+    )
     day_start = datetime.combine(today, datetime.min.time())
 
-    methods = PaymentMethod.query.filter_by(autopay_enabled=True, is_default=True, reusable=True,
-                                            revoked_at=None).all()
+    methods = PaymentMethod.query.filter_by(
+        autopay_enabled=True, is_default=True, reusable=True, revoked_at=None
+    ).all()
     attempts = 0
     for method in methods:
-        plans = InstalmentPlan.query.filter_by(customer_id=method.customer_id, status='active',
-                                               paused_at=None).all()
+        plans = InstalmentPlan.query.filter_by(
+            customer_id=method.customer_id, status="active", paused_at=None
+        ).all()
         for plan in plans:
             payment = next_payable_instalment(plan)
-            if not payment or payment.status == 'pending_verification' or not payment.due_date:
+            if (
+                not payment
+                or payment.status == "pending_verification"
+                or not payment.due_date
+            ):
                 continue
-            if (today - payment.due_date.date()).days not in [int(d) for d in retry_days]:
+            if (today - payment.due_date.date()).days not in [
+                int(d) for d in retry_days
+            ]:
                 continue
             # Once per instalment per day, and never while another attempt is in flight
             already = PaymentIntent.query.filter(
@@ -87,24 +100,35 @@ def run(today=None):
             amount_pesewas = to_pesewas(payment.get_total_due())
             intent = PaymentIntent(
                 reference=f"TBA-{plan.id}-{payment.installment_number}-{uuid.uuid4().hex[:10]}",
-                purpose=PaymentIntent.INSTALMENT, plan_id=plan.id, payment_id=payment.id,
-                customer_id=method.customer_id, amount_pesewas=amount_pesewas, currency='GHS',
-                channel='autopay',
+                purpose=PaymentIntent.INSTALMENT,
+                plan_id=plan.id,
+                payment_id=payment.id,
+                customer_id=method.customer_id,
+                amount_pesewas=amount_pesewas,
+                currency="GHS",
+                channel="autopay",
             )
             db.session.add(intent)
             db.session.flush()
             attempts += 1
             try:
                 data = paystack.charge_authorization(
-                    email=method.email, amount_pesewas=amount_pesewas,
-                    authorization_code=method.authorization_code, reference=intent.reference,
-                    metadata={"plan_id": plan.id, "installment_number": payment.installment_number,
-                              "autopay": True},
+                    email=method.email,
+                    amount_pesewas=amount_pesewas,
+                    authorization_code=method.authorization_code,
+                    reference=intent.reference,
+                    metadata={
+                        "plan_id": plan.id,
+                        "installment_number": payment.installment_number,
+                        "autopay": True,
+                    },
                 )
             except paystack.PaystackError as e:
                 intent.status = PaymentIntent.FAILED
                 intent.gateway_response = str(e)[:255]
-                current_app.logger.warning("Autopay failed for %s: %s", intent.reference, e)
+                current_app.logger.warning(
+                    "Autopay failed for %s: %s", intent.reference, e
+                )
                 continue
             # A successful charge comes straight from Paystack's API, so it can be applied now;
             # anything else is finished later by the webhook.

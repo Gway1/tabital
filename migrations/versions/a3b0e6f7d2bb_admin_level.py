@@ -12,18 +12,20 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = 'a3b0e6f7d2bb'
-down_revision = 'f2a9d4e5c1aa'
+revision = "a3b0e6f7d2bb"
+down_revision = "f2a9d4e5c1aa"
 branch_labels = None
 depends_on = None
 
 
 def upgrade():
-    with op.batch_alter_table('users') as batch_op:
-        batch_op.add_column(sa.Column('admin_level', sa.String(length=20), nullable=True))
+    with op.batch_alter_table("users") as batch_op:
+        batch_op.add_column(
+            sa.Column("admin_level", sa.String(length=20), nullable=True)
+        )
     op.execute("UPDATE users SET admin_level = 'management' WHERE role = 'admin'")
 
 
 def downgrade():
-    with op.batch_alter_table('users') as batch_op:
-        batch_op.drop_column('admin_level')
+    with op.batch_alter_table("users") as batch_op:
+        batch_op.drop_column("admin_level")

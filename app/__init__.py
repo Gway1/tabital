@@ -27,15 +27,24 @@ def create_app():
     if not app.config.get("SECRET_KEY"):
         if app.config.get("DEBUG"):
             import secrets
+
             app.config["SECRET_KEY"] = secrets.token_urlsafe(64)
-            app.logger.warning("SECRET_KEY not set; using a random key for this debug session only")
+            app.logger.warning(
+                "SECRET_KEY not set; using a random key for this debug session only"
+            )
         else:
             raise RuntimeError("SECRET_KEY environment variable must be set")
 
     CORS(
         app,
         resources={r"/*": {"origins": app.config["CORS_ORIGINS"]}},
-        allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Device-Id", "X-Device-Flags"],
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "X-Requested-With",
+            "X-Device-Id",
+            "X-Device-Flags",
+        ],
         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     )
 
@@ -68,7 +77,11 @@ def register_pii_masking(app):
         path = request.path or ""
         if not path.startswith("/admin/") or path.startswith("/admin/pii/"):
             return response
-        if response.status_code >= 400 or not response.is_json or response.direct_passthrough:
+        if (
+            response.status_code >= 400
+            or not response.is_json
+            or response.direct_passthrough
+        ):
             return response
         data = response.get_json(silent=True)
         if data is None:
@@ -89,13 +102,15 @@ def register_access_control(app):
         try:
             data = guard.extract_jwt_token(guard.read_token_from_header())
             user = User.query.get(data.get("id"))
-        except Exception:        # bad or expired token: the endpoint's own auth check answers
+        except Exception:  # bad or expired token: the endpoint's own auth check answers
             return None
         # A suspended, rejected or pending account loses access at once, not when its token expires
         # (flask_praetorian only checks is_valid when a token is issued or refreshed)
         if user is None or not user.is_valid():
-            return {"error": "Your account isn't active. Please contact Tabital.",
-                    "code": "account_inactive"}, 401
+            return {
+                "error": "Your account isn't active. Please contact Tabital.",
+                "code": "account_inactive",
+            }, 401
         if user.role != "admin" or access.is_management(user):
             return None
         if access.needs_management(request.method, request.path):
@@ -109,7 +124,11 @@ def register_commands(app):
     @app.cli.command("create-admin")
     @click.option("--phone", required=True, help="Admin login phone number")
     @click.option("--name", default="Tabital Admin")
-    @click.option("--management", is_flag=True, help="Give Management Access (approvals, rates, reveals)")
+    @click.option(
+        "--management",
+        is_flag=True,
+        help="Give Management Access (approvals, rates, reveals)",
+    )
     @click.password_option()
     def create_admin(phone, name, management, password):
         """Create an admin account. Admins can't be created through the public API.
@@ -117,18 +136,68 @@ def register_commands(app):
         New admins get operations (read-only) access unless --management is given.
         """
         from .services import access
+
         if User.query.filter_by(phone=phone).first():
             raise click.ClickException("A user with that phone number already exists")
         level = access.MANAGEMENT if management else access.OPERATIONS
-        admin = User(phone=phone, full_name=name, role="admin", status="approved", admin_level=level,
-                     password=guard.hash_password(password))
+        admin = User(
+            phone=phone,
+            full_name=name,
+            role="admin",
+            status="approved",
+            admin_level=level,
+            password=guard.hash_password(password),
+        )
         db.session.add(admin)
         db.session.commit()
         click.echo(f"Admin {phone} created with {level} access")
 
+    @app.cli.command("seed-data")
+    @click.option(
+        "--customers", default=12, show_default=True, help="Customers to create"
+    )
+    @click.option(
+        "--merchants", default=3, show_default=True, help="Merchants to create"
+    )
+    @click.option(
+        "--products", default=5, show_default=True, help="Products per merchant"
+    )
+    @click.option(
+        "--seed",
+        default=42,
+        show_default=True,
+        help="Random seed: the same seed gives the same data",
+    )
+    @click.option(
+        "--password",
+        default="Secret123!",
+        show_default=True,
+        help="Password for every seeded login",
+    )
+    @click.option(
+        "--reset",
+        is_flag=True,
+        help="Delete the seeded users and everything that belongs to them",
+    )
+    @click.option(
+        "--force",
+        is_flag=True,
+        help="Allow a database that isn't on this machine (asks to confirm)",
+    )
+    def seed_data(customers, merchants, products, seed, password, reset, force):
+        """Fill a local database with test users, products, plans, payments and disputes.
+
+        Safe to re-run: seeded accounts use phones 0200010000-0200019999 and are never duplicated.
+        """
+        from . import seed as seeding
+
+        seeding.run(app, customers, merchants, products, seed, password, reset, force)
+
     @app.cli.command("set-admin-access")
     @click.option("--phone", required=True)
-    @click.option("--level", required=True, type=click.Choice(["management", "operations"]))
+    @click.option(
+        "--level", required=True, type=click.Choice(["management", "operations"])
+    )
     def set_admin_access(phone, level):
         """Change an admin's access from the server (e.g. to set up the first manager)."""
         admin = User.query.filter_by(phone=phone, role="admin").first()
@@ -139,7 +208,12 @@ def register_commands(app):
         click.echo(f"{phone} now has {level} access")
 
     @app.cli.command("run-daily")
-    @click.option("--date", "run_date", default=None, help="Service as of this date (YYYY-MM-DD); default today")
+    @click.option(
+        "--date",
+        "run_date",
+        default=None,
+        help="Service as of this date (YYYY-MM-DD); default today",
+    )
     @click.option("--no-reminders", is_flag=True)
     @click.option("--no-autopay", is_flag=True)
     def run_daily_command(run_date, no_reminders, no_autopay):
@@ -149,13 +223,18 @@ def register_commands(app):
         """
         from datetime import datetime as _dt
         from .services import servicing
+
         day = _dt.strptime(run_date, "%Y-%m-%d").date() if run_date else None
-        summary = servicing.run_daily(day, send_reminders=not no_reminders, run_autopay=not no_autopay)
+        summary = servicing.run_daily(
+            day, send_reminders=not no_reminders, run_autopay=not no_autopay
+        )
         for key, value in summary.to_dict().items():
             click.echo(f"{key}: {value}")
 
     @app.cli.command("ledger-backfill")
-    @click.option("--dry-run", is_flag=True, help="Report what would be written without saving")
+    @click.option(
+        "--dry-run", is_flag=True, help="Report what would be written without saving"
+    )
     def ledger_backfill(dry_run):
         """Create ledger entries for plans made before the ledger existed.
 
@@ -177,32 +256,70 @@ def register_commands(app):
                 continue
             # Entries are dated when things happened, so reports put them in the right month
             opened = plan.created_at
-            ledger.record(plan, "plan_opened", plan.total_amount, note="Backfill: contract total payable", at=opened)
+            ledger.record(
+                plan,
+                "plan_opened",
+                plan.total_amount,
+                note="Backfill: contract total payable",
+                at=opened,
+            )
             # Merchant side, from the payout stored on the sale when it was approved
-            sale = Transaction.query.get(plan.transaction_id) if plan.transaction_id else None
+            sale = (
+                Transaction.query.get(plan.transaction_id)
+                if plan.transaction_id
+                else None
+            )
             if sale is not None and sale.payout_amount is not None:
                 fee = Decimal(str(sale.amount or 0)) - Decimal(str(sale.payout_amount))
-                ledger.record(plan, LedgerEntry.MERCHANT_FEE, fee, account=LedgerEntry.MERCHANT,
-                              note="Backfill: merchant discount (MDR)", at=opened)
-                ledger.record(plan, LedgerEntry.MERCHANT_PAYABLE, sale.payout_amount, account=LedgerEntry.MERCHANT,
-                              note="Backfill: settlement owed to merchant", at=opened)
+                ledger.record(
+                    plan,
+                    LedgerEntry.MERCHANT_FEE,
+                    fee,
+                    account=LedgerEntry.MERCHANT,
+                    note="Backfill: merchant discount (MDR)",
+                    at=opened,
+                )
+                ledger.record(
+                    plan,
+                    LedgerEntry.MERCHANT_PAYABLE,
+                    sale.payout_amount,
+                    account=LedgerEntry.MERCHANT,
+                    note="Backfill: settlement owed to merchant",
+                    at=opened,
+                )
             else:
                 no_fee.append(plan.id)
             payments = InstalmentPayment.query.filter_by(plan_id=plan.id).all()
             for p in payments:
-                if p.late_fee and (p.late_fee_paid or p.status != 'paid'):
-                    ledger.record(plan, LedgerEntry.LATE_FEE_CHARGED, p.late_fee, payment=p,
-                                  note="Backfill: late fee", at=p.late_fee_applied_date or p.due_date)
-                if p.status == 'paid':
-                    paid = p.paid_amount or (Decimal(str(p.amount)) + Decimal(str(p.late_fee or 0)))
-                    ledger.record(plan, LedgerEntry.PAYMENT_RECEIVED, -Decimal(str(paid)), payment=p,
-                                  reference=p.payment_reference or "backfill",
-                                  note=f"Backfill: payment {p.installment_number}", at=p.paid_date or p.due_date)
+                if p.late_fee and (p.late_fee_paid or p.status != "paid"):
+                    ledger.record(
+                        plan,
+                        LedgerEntry.LATE_FEE_CHARGED,
+                        p.late_fee,
+                        payment=p,
+                        note="Backfill: late fee",
+                        at=p.late_fee_applied_date or p.due_date,
+                    )
+                if p.status == "paid":
+                    paid = p.paid_amount or (
+                        Decimal(str(p.amount)) + Decimal(str(p.late_fee or 0))
+                    )
+                    ledger.record(
+                        plan,
+                        LedgerEntry.PAYMENT_RECEIVED,
+                        -Decimal(str(paid)),
+                        payment=p,
+                        reference=p.payment_reference or "backfill",
+                        note=f"Backfill: payment {p.installment_number}",
+                        at=p.paid_date or p.due_date,
+                    )
             created += 1
         if no_fee:
-            click.echo(f"{len(no_fee)} plan(s) had no stored merchant payout, so no merchant fee was written "
-                       f"(plan ids: {', '.join(map(str, no_fee[:50]))}{'…' if len(no_fee) > 50 else ''}). "
-                       "Their merchant fees are missing from revenue until entered by hand.")
+            click.echo(
+                f"{len(no_fee)} plan(s) had no stored merchant payout, so no merchant fee was written "
+                f"(plan ids: {', '.join(map(str, no_fee[:50]))}{'…' if len(no_fee) > 50 else ''}). "
+                "Their merchant fees are missing from revenue until entered by hand."
+            )
         if dry_run:
             db.session.rollback()
             click.echo(f"Dry run: would backfill {created} plan(s)")

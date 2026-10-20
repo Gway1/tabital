@@ -17,14 +17,17 @@ RULES = {
     "version": "2026-09-26.8",
     # Eligibility (hard declines)
     "min_age": 18,
-    "min_monthly_salary": 2000,          # GHS, §2
-    "min_employment_months": 6,          # website criteria, §13 #17
-    "max_dpd_allowed": 30,               # anything later than this blocks new credit (§8.4)
+    "min_monthly_salary": 2000,  # GHS, §2
+    "min_employment_months": 6,  # website criteria, §13 #17
+    "max_dpd_allowed": 30,  # anything later than this blocks new credit (§8.4)
     # Tiers (§8.2). New customers start at medium: no repayment history yet.
     "tiers": {
-        "low":    {"pay_in_4_dp_rate": "0.40", "limit_multiplier": "1.5"},
-        "medium": {"pay_in_4_dp_rate": "0.40", "limit_multiplier": "1.0"},   # §13 #4 interim 40%
-        "high":   {"pay_in_4_dp_rate": "0.50", "limit_multiplier": "0.5"},
+        "low": {"pay_in_4_dp_rate": "0.40", "limit_multiplier": "1.5"},
+        "medium": {
+            "pay_in_4_dp_rate": "0.40",
+            "limit_multiplier": "1.0",
+        },  # §13 #4 interim 40%
+        "high": {"pay_in_4_dp_rate": "0.50", "limit_multiplier": "0.5"},
     },
     # Promotion to low: at least this many plans completed with no late payment
     "low_tier_min_clean_plans": 1,
@@ -81,6 +84,7 @@ def rules(overrides=None):
 @dataclass
 class Facts:
     """Everything the decision uses. Built from the database by `facts_for()`."""
+
     today: date
     date_of_birth: Optional[date]
     ghana_card_number: Optional[str]
@@ -91,13 +95,19 @@ class Facts:
     salary_paid_to_bank: bool
     momo_number: Optional[str]
     outstanding_balance: Decimal = Decimal("0.00")
-    max_days_past_due: int = 0           # worst currently unpaid instalment
+    max_days_past_due: int = 0  # worst currently unpaid instalment
     currently_overdue: bool = False
-    late_payments_total: int = 0         # late instalments that count (not cured, not expired)
-    late_payments_cured: int = 0         # late but paid within the cure window with the fee (no penalty)
-    late_payments_expired: int = 0       # not cured, but older than the expiry window (no penalty)
-    completed_clean_plans: int = 0       # completed with no late payment that counts
-    consecutive_clean_plans: int = 0     # most recent completed plans in a row with no late payment
+    late_payments_total: int = 0  # late instalments that count (not cured, not expired)
+    late_payments_cured: int = (
+        0  # late but paid within the cure window with the fee (no penalty)
+    )
+    late_payments_expired: int = (
+        0  # not cured, but older than the expiry window (no penalty)
+    )
+    completed_clean_plans: int = 0  # completed with no late payment that counts
+    consecutive_clean_plans: int = (
+        0  # most recent completed plans in a row with no late payment
+    )
     defaulted_plans: int = 0
 
 
@@ -144,11 +154,15 @@ def assess(f: Facts, r=None) -> Decision:
         reasons.append(f"Monthly salary is below GHS {r['min_monthly_salary']:,}")
     if f.monthly_salary is not None and not f.salary_verified:
         reasons.append("Monthly salary has not been verified")
-    employment_months = _months_between(f.employment_start, f.today) if f.employment_start else None
+    employment_months = (
+        _months_between(f.employment_start, f.today) if f.employment_start else None
+    )
     if employment_months is None:
         reasons.append("Employment start date is missing")
     elif employment_months < r["min_employment_months"]:
-        reasons.append(f"Employment must be at least {r['min_employment_months']} months")
+        reasons.append(
+            f"Employment must be at least {r['min_employment_months']} months"
+        )
     if not f.salary_paid_to_bank:
         reasons.append("Salary must be paid into a bank account")
     if not (f.momo_number or "").strip():
@@ -156,19 +170,37 @@ def assess(f: Facts, r=None) -> Decision:
     if f.defaulted_plans > 0:
         reasons.append("Customer has a defaulted plan")
     if f.max_days_past_due > r["max_dpd_allowed"]:
-        reasons.append(f"An instalment is more than {r['max_dpd_allowed']} days overdue")
+        reasons.append(
+            f"An instalment is more than {r['max_dpd_allowed']} days overdue"
+        )
 
     if reasons:
-        return Decision(False, None, None, Decimal("0"), Decimal("0.00"), Decimal("0.00"), False,
-                        reasons, r["version"])
+        return Decision(
+            False,
+            None,
+            None,
+            Decimal("0"),
+            Decimal("0.00"),
+            Decimal("0.00"),
+            False,
+            reasons,
+            r["version"],
+        )
 
     # ---- tier ----
-    if (employment_months < r["high_tier_if_employment_months_below"]
-            or f.late_payments_total >= r["high_tier_if_late_payments_at_least"]
-            or f.currently_overdue):
+    if (
+        employment_months < r["high_tier_if_employment_months_below"]
+        or f.late_payments_total >= r["high_tier_if_late_payments_at_least"]
+        or f.currently_overdue
+    ):
         tier = "high"
-        reasons.append("High tier: short employment, late payment history or a payment currently overdue")
-    elif f.completed_clean_plans >= r["low_tier_min_clean_plans"] and f.late_payments_total == 0:
+        reasons.append(
+            "High tier: short employment, late payment history or a payment currently overdue"
+        )
+    elif (
+        f.completed_clean_plans >= r["low_tier_min_clean_plans"]
+        and f.late_payments_total == 0
+    ):
         # Low tier: plans paid on time and no late payments that count. Cured late payments
         # don't demote, but their plans aren't "clean", so they don't help anyone get promoted.
         tier = "low"
@@ -182,29 +214,43 @@ def assess(f: Facts, r=None) -> Decision:
 
     # ---- dynamic limit (D9): grow with clean history (never for high tier), shrink with late payments ----
     if tier != "high" and f.completed_clean_plans:
-        growth = min(Decimal(str(r["growth_per_clean_plan"])) * f.completed_clean_plans,
-                     Decimal(str(r["growth_cap"])))
+        growth = min(
+            Decimal(str(r["growth_per_clean_plan"])) * f.completed_clean_plans,
+            Decimal(str(r["growth_cap"])),
+        )
         if growth:
             multiplier += growth
-            reasons.append(f"Limit increased by {growth} x salary for {f.completed_clean_plans} plan(s) paid on time")
+            reasons.append(
+                f"Limit increased by {growth} x salary for {f.completed_clean_plans} plan(s) paid on time"
+            )
     if f.late_payments_total:
-        reduction = Decimal(str(r["reduction_per_late_payment"])) * f.late_payments_total
+        reduction = (
+            Decimal(str(r["reduction_per_late_payment"])) * f.late_payments_total
+        )
         floor = Decimal(str(r["min_multiplier"]))
         new_multiplier = max(multiplier - reduction, floor)
         if new_multiplier != multiplier:
-            reasons.append(f"Limit reduced by {multiplier - new_multiplier} x salary for "
-                           f"{f.late_payments_total} late payment(s)")
+            reasons.append(
+                f"Limit reduced by {multiplier - new_multiplier} x salary for "
+                f"{f.late_payments_total} late payment(s)"
+            )
         multiplier = new_multiplier
 
     if f.late_payments_expired:
-        reasons.append(f"{f.late_payments_expired} late payment(s) older than "
-                       f"{r.get('late_payment_expiry_months', 12)} months no longer reduce the limit")
+        reasons.append(
+            f"{f.late_payments_expired} late payment(s) older than "
+            f"{r.get('late_payment_expiry_months', 12)} months no longer reduce the limit"
+        )
     if f.late_payments_cured:
-        reasons.append(f"{f.late_payments_cured} late payment(s) cleared within the grace window: "
-                       "limit kept, but those plans don't count toward a limit increase")
+        reasons.append(
+            f"{f.late_payments_cured} late payment(s) cleared within the grace window: "
+            "limit kept, but those plans don't count toward a limit increase"
+        )
 
     credit_limit = (f.monthly_salary * multiplier).quantize(CENT, ROUND_HALF_UP)
-    available = max(credit_limit - f.outstanding_balance, Decimal("0.00")).quantize(CENT)
+    available = max(credit_limit - f.outstanding_balance, Decimal("0.00")).quantize(
+        CENT
+    )
     if f.currently_overdue:
         available = Decimal("0.00")
         reasons.append("No new credit while a payment is overdue")
@@ -216,8 +262,10 @@ def assess(f: Facts, r=None) -> Decision:
         limit_multiplier=multiplier,
         credit_limit=credit_limit,
         available_limit=available,
-        extended_plans_eligible=(f.consecutive_clean_plans >= r["extended_plan_min_consecutive_clean_plans"]
-                                 and not f.currently_overdue),
+        extended_plans_eligible=(
+            f.consecutive_clean_plans >= r["extended_plan_min_consecutive_clean_plans"]
+            and not f.currently_overdue
+        ),
         reasons=reasons,
         rules_version=r["version"],
     )
@@ -227,10 +275,12 @@ def assess(f: Facts, r=None) -> Decision:
 # Database side: gather facts, apply overrides, store the decision
 # ----------------------------------------------------------------------------
 
+
 def parse_date(value) -> Optional[date]:
     if value is None or isinstance(value, date):
         return value
     from datetime import datetime
+
     text = str(value).strip()
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
         try:
@@ -242,6 +292,7 @@ def parse_date(value) -> Optional[date]:
 
 def current_rules():
     from ..models.system_settings import SystemSetting
+
     return rules(SystemSetting.get_value("risk_rules", None))
 
 
@@ -258,36 +309,55 @@ def facts_for(user, today=None) -> Facts:
     expiry_months = int(r.get("late_payment_expiry_months", 12))
     plans = InstalmentPlan.query.filter_by(customer_id=user.id).all()
     plan_ids = [p.id for p in plans]
-    payments = InstalmentPayment.query.filter(InstalmentPayment.plan_id.in_(plan_ids)).all() if plan_ids else []
+    payments = (
+        InstalmentPayment.query.filter(InstalmentPayment.plan_id.in_(plan_ids)).all()
+        if plan_ids
+        else []
+    )
 
     # Late instalments that count against the customer, per plan. A late instalment is
     # cured (doesn't count) if paid within `cure_days` of its due date with its late fee.
     # An unpaid one only counts once it's past the cure window.
-    late_by_plan = {}        # late (not cured) per plan: these plans are never "clean"
+    late_by_plan = {}  # late (not cured) per plan: these plans are never "clean"
     cured_by_plan = {}
     cured = 0
-    counting = 0             # late payments that currently lower the limit/tier
+    counting = 0  # late payments that currently lower the limit/tier
     expired = 0
     # A waived fee isn't a cleared late payment (D14): instalments with any waiver never count as cured
     from ..extensions import db
     from ..models.ledger import LedgerEntry
+
     pay_ids = [p.id for p in payments if p.id is not None]
-    waived_ids = {pid for (pid,) in db.session.query(LedgerEntry.payment_id).filter(
-        LedgerEntry.entry_type == LedgerEntry.LATE_FEE_WAIVED, LedgerEntry.payment_id.in_(pay_ids)).distinct()} \
-        if pay_ids else set()
+    waived_ids = (
+        {
+            pid
+            for (pid,) in db.session.query(LedgerEntry.payment_id)
+            .filter(
+                LedgerEntry.entry_type == LedgerEntry.LATE_FEE_WAIVED,
+                LedgerEntry.payment_id.in_(pay_ids),
+            )
+            .distinct()
+        }
+        if pay_ids
+        else set()
+    )
     for p in payments:
         if p.late_fee_applied_date is None or not p.due_date:
             continue
         due = p.due_date.date()
-        if p.status == 'paid' and p.paid_date:
+        if p.status == "paid" and p.paid_date:
             # Cured: paid within the window, and a late fee was charged and paid (not waived)
-            if (p.paid_date.date() - due).days <= cure_days and p.late_fee_paid and p.late_fee \
-                    and p.id not in waived_ids:
+            if (
+                (p.paid_date.date() - due).days <= cure_days
+                and p.late_fee_paid
+                and p.late_fee
+                and p.id not in waived_ids
+            ):
                 cured += 1
                 cured_by_plan[p.plan_id] = cured_by_plan.get(p.plan_id, 0) + 1
                 continue
         elif (today - due).days <= cure_days:
-            continue          # still inside the cure window
+            continue  # still inside the cure window
         late_by_plan[p.plan_id] = late_by_plan.get(p.plan_id, 0) + 1
         if _months_between(due, today) >= expiry_months:
             expired += 1
@@ -301,20 +371,41 @@ def facts_for(user, today=None) -> Facts:
     for p in payments:
         if p.plan_id in paused_plan_ids:
             continue
-        if p.status in ('pending', 'overdue') and p.due_date and p.due_date.date() < today:
+        if (
+            p.status in ("pending", "overdue")
+            and p.due_date
+            and p.due_date.date() < today
+        ):
             max_dpd = max(max_dpd, (today - p.due_date.date()).days)
 
-    completed = sorted([p for p in plans if p.status == 'completed'],
-                       key=lambda p: p.completed_at or p.created_at, reverse=True)
+    completed = sorted(
+        [p for p in plans if p.status == "completed"],
+        key=lambda p: p.completed_at or p.created_at,
+        reverse=True,
+    )
     # "Clean" = completed with no late payment at all. Plans with only cured late payments
     # aren't penalised, but they don't earn limit growth, low-tier promotion or streak credit.
     from ..models.deferment import Deferment
-    deferred_plan_ids = set() if r.get("deferred_plans_count_as_clean") else {
-        d.plan_id for d in Deferment.query.filter(Deferment.plan_id.in_(plan_ids),
-                                                  Deferment.status == Deferment.APPLIED).all()} if plan_ids else set()
+
+    deferred_plan_ids = (
+        set()
+        if r.get("deferred_plans_count_as_clean")
+        else {
+            d.plan_id
+            for d in Deferment.query.filter(
+                Deferment.plan_id.in_(plan_ids), Deferment.status == Deferment.APPLIED
+            ).all()
+        }
+        if plan_ids
+        else set()
+    )
 
     def is_clean(plan):
-        return not late_by_plan.get(plan.id) and not cured_by_plan.get(plan.id) and plan.id not in deferred_plan_ids
+        return (
+            not late_by_plan.get(plan.id)
+            and not cured_by_plan.get(plan.id)
+            and plan.id not in deferred_plan_ids
+        )
 
     clean = [p for p in completed if is_clean(p)]
     consecutive = 0
@@ -323,16 +414,24 @@ def facts_for(user, today=None) -> Facts:
             break
         consecutive += 1
 
-    active = [p for p in plans if p.status == 'active']
-    outstanding = sum((ledger.plan_balances(active)[p.id]["outstanding"] for p in active), Decimal("0.00")) \
-        if active else Decimal("0.00")
+    active = [p for p in plans if p.status == "active"]
+    outstanding = (
+        sum(
+            (ledger.plan_balances(active)[p.id]["outstanding"] for p in active),
+            Decimal("0.00"),
+        )
+        if active
+        else Decimal("0.00")
+    )
 
     return Facts(
         today=today,
         date_of_birth=parse_date(user.dob),
         ghana_card_number=user.national_id,
-        kyc_verified=user.kyc_status == 'verified',
-        monthly_salary=Decimal(str(user.monthly_salary)) if user.monthly_salary is not None else None,
+        kyc_verified=user.kyc_status == "verified",
+        monthly_salary=Decimal(str(user.monthly_salary))
+        if user.monthly_salary is not None
+        else None,
         salary_verified=bool(user.salary_verified),
         employment_start=parse_date(user.employment_start_date),
         salary_paid_to_bank=bool(user.salary_paid_to_bank),
@@ -345,14 +444,18 @@ def facts_for(user, today=None) -> Facts:
         late_payments_expired=expired,
         completed_clean_plans=len(clean),
         consecutive_clean_plans=consecutive,
-        defaulted_plans=len([p for p in plans if p.status == 'defaulted']),
+        defaulted_plans=len([p for p in plans if p.status == "defaulted"]),
     )
 
 
 def _facts_json(f: Facts):
     out = {}
     for key, value in f.__dict__.items():
-        out[key] = value.isoformat() if isinstance(value, date) else (str(value) if isinstance(value, Decimal) else value)
+        out[key] = (
+            value.isoformat()
+            if isinstance(value, date)
+            else (str(value) if isinstance(value, Decimal) else value)
+        )
     return out
 
 
@@ -366,9 +469,16 @@ def decide(user, today=None):
     if decision.eligible and user.credit_limit_override is not None:
         override = Decimal(str(user.credit_limit_override)).quantize(CENT)
         decision.credit_limit = override
-        decision.available_limit = Decimal("0.00") if facts.currently_overdue else \
-            max(override - facts.outstanding_balance, Decimal("0.00")).quantize(CENT)
-        decision.reasons.append(f"Credit limit set by admin override: GHS {override:,.2f}")
+        decision.available_limit = (
+            Decimal("0.00")
+            if facts.currently_overdue
+            else max(override - facts.outstanding_balance, Decimal("0.00")).quantize(
+                CENT
+            )
+        )
+        decision.reasons.append(
+            f"Credit limit set by admin override: GHS {override:,.2f}"
+        )
     return decision, facts
 
 
@@ -379,7 +489,9 @@ def decision_view(decision: Decision):
         "tier": decision.tier,
         "credit_limit": float(decision.credit_limit),
         "available_limit": float(decision.available_limit),
-        "pay_in_4_down_payment_percent": float(decision.pay_in_4_dp_rate * 100) if decision.pay_in_4_dp_rate else None,
+        "pay_in_4_down_payment_percent": float(decision.pay_in_4_dp_rate * 100)
+        if decision.pay_in_4_dp_rate
+        else None,
         "extended_plans_eligible": decision.extended_plans_eligible,
         "reasons": decision.reasons,
         "rules_version": decision.rules_version,

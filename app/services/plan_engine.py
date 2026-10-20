@@ -35,8 +35,15 @@ def add_months(start: datetime, months: int) -> datetime:
     return start.replace(year=year, month=month, day=day)
 
 
-def build_plan(price, n_payments, dp_rate, service_fee="0", mdr="0.10",
-               delivery_fee="0", start=None):
+def build_plan(
+    price,
+    n_payments,
+    dp_rate,
+    service_fee="0",
+    mdr="0.10",
+    delivery_fee="0",
+    start=None,
+):
     """Build a plan per §5.2 / §5.5.
 
     price        P, product price x quantity
@@ -76,30 +83,36 @@ def build_plan(price, n_payments, dp_rate, service_fee="0", mdr="0.10",
     merchant_fee = (price * mdr).quantize(CENT, ROUND_HALF_UP)
     total_payable = price + service_fee + delivery_fee
 
-    schedule = [{
-        "installment_number": 1,
-        "type": "down_payment",
-        "amount": down_payment + delivery_fee,
-        "principal": down_payment,
-        "delivery_fee": delivery_fee,
-        "due_date": start,
-        "status": "due_now",
-        "description": f"Down payment ({(dp_rate * 100).normalize()}%)"
-                       + (" + delivery fee" if delivery_fee else ""),
-    }]
+    schedule = [
+        {
+            "installment_number": 1,
+            "type": "down_payment",
+            "amount": down_payment + delivery_fee,
+            "principal": down_payment,
+            "delivery_fee": delivery_fee,
+            "due_date": start,
+            "status": "due_now",
+            "description": f"Down payment ({(dp_rate * 100).normalize()}%)"
+            + (" + delivery fee" if delivery_fee else ""),
+        }
+    ]
     for i, amount in enumerate(installments, start=1):
-        schedule.append({
-            "installment_number": i + 1,
-            "type": "installment",
-            "amount": amount,
-            "principal": amount,
-            "delivery_fee": Decimal("0.00"),
-            "due_date": add_months(start, i),
-            "status": "pending",
-            "description": f"Instalment {i} of {deferred}",
-        })
+        schedule.append(
+            {
+                "installment_number": i + 1,
+                "type": "installment",
+                "amount": amount,
+                "principal": amount,
+                "delivery_fee": Decimal("0.00"),
+                "due_date": add_months(start, i),
+                "status": "pending",
+                "description": f"Instalment {i} of {deferred}",
+            }
+        )
 
-    assert sum(p["amount"] for p in schedule) == total_payable, "schedule must sum to TotalPayable"
+    assert (
+        sum(p["amount"] for p in schedule) == total_payable
+    ), "schedule must sum to TotalPayable"
 
     return {
         "price": price,
@@ -128,7 +141,9 @@ def down_payment_rate_for(n_payments, settings_get, pay_in_4_dp_rate=None):
     rules). When given it applies; otherwise the configured default does.
     """
     if n_payments not in SUPPORTED_PLANS:
-        raise PlanError(f"Only {', '.join(map(str, SUPPORTED_PLANS))}-payment plans are available")
+        raise PlanError(
+            f"Only {', '.join(map(str, SUPPORTED_PLANS))}-payment plans are available"
+        )
     if n_payments == 1:
         return Decimal("1")
     if n_payments == 4:
@@ -138,8 +153,16 @@ def down_payment_rate_for(n_payments, settings_get, pay_in_4_dp_rate=None):
     return rate(settings_get("down_payment_percentage_short_plans", 50)) / 100
 
 
-def quote(price, quantity, n_payments, settings_get, start=None, pay_in_4_dp_rate=None, in_store=False,
-          mdr=None):
+def quote(
+    price,
+    quantity,
+    n_payments,
+    settings_get,
+    start=None,
+    pay_in_4_dp_rate=None,
+    in_store=False,
+    mdr=None,
+):
     """Build a plan using the current system settings (and the customer's tier, if given).
 
     settings_get(key, default) is normally SystemSetting.get_value. in_store: collected at
@@ -155,7 +178,9 @@ def quote(price, quantity, n_payments, settings_get, start=None, pay_in_4_dp_rat
         n_payments=n_payments,
         dp_rate=down_payment_rate_for(n_payments, settings_get, pay_in_4_dp_rate),
         service_fee=settings_get("service_fee", 0),
-        mdr=rate(mdr) if mdr is not None else rate(settings_get("merchant_fee_percentage", 10)) / 100,
+        mdr=rate(mdr)
+        if mdr is not None
+        else rate(settings_get("merchant_fee_percentage", 10)) / 100,
         delivery_fee=0 if in_store else settings_get("delivery_fee", 50),
         start=start,
     )
@@ -163,10 +188,13 @@ def quote(price, quantity, n_payments, settings_get, start=None, pay_in_4_dp_rat
 
 def schedule_to_json(schedule):
     """JSON-safe schedule (amounts as floats for the current API contract)."""
-    return [{
-        **item,
-        "amount": float(item["amount"]),
-        "principal": float(item["principal"]),
-        "delivery_fee": float(item["delivery_fee"]),
-        "due_date": item["due_date"].strftime("%Y-%m-%d"),
-    } for item in schedule]
+    return [
+        {
+            **item,
+            "amount": float(item["amount"]),
+            "principal": float(item["principal"]),
+            "delivery_fee": float(item["delivery_fee"]),
+            "due_date": item["due_date"].strftime("%Y-%m-%d"),
+        }
+        for item in schedule
+    ]

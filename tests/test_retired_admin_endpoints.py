@@ -11,12 +11,34 @@ def test_retired_endpoints_refuse_and_change_nothing(app_ctx):  # noqa: F811
     before_status, before_rate = plan.status, merchant.commission_rate
 
     calls = [
-        client.put(f"/admin/instalments/{plan.id}/status", headers=admin_h, json={"status": "completed"}),
-        client.put("/admin/transactions/1/status", headers=admin_h, json={"status": "completed"}),
-        client.put("/admin/transactions/1/delivery", headers=admin_h, json={"delivery_status": "delivered"}),
-        client.post("/admin/transactions/1/refund", headers=admin_h, json={"refund_amount": 100}),
-        client.put(f"/admin/merchants/{merchant.id}/reserve", headers=admin_h, json={"reserve_amount": 50}),
-        client.put(f"/admin/merchants/{merchant.id}/commission", headers=admin_h, json={"commission_rate": 1}),
+        client.put(
+            f"/admin/instalments/{plan.id}/status",
+            headers=admin_h,
+            json={"status": "completed"},
+        ),
+        client.put(
+            "/admin/transactions/1/status",
+            headers=admin_h,
+            json={"status": "completed"},
+        ),
+        client.put(
+            "/admin/transactions/1/delivery",
+            headers=admin_h,
+            json={"delivery_status": "delivered"},
+        ),
+        client.post(
+            "/admin/transactions/1/refund", headers=admin_h, json={"refund_amount": 100}
+        ),
+        client.put(
+            f"/admin/merchants/{merchant.id}/reserve",
+            headers=admin_h,
+            json={"reserve_amount": 50},
+        ),
+        client.put(
+            f"/admin/merchants/{merchant.id}/commission",
+            headers=admin_h,
+            json={"commission_rate": 1},
+        ),
     ]
     for res in calls:
         assert res.status_code == 410, res.get_json()

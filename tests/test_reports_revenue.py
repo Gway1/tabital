@@ -7,26 +7,45 @@ from tests.test_ledger import app_ctx, approved_plan  # noqa: F401  (fixture)
 def test_revenue_report_uses_the_ledger(app_ctx):  # noqa: F811
     client, admin_h, plan = approved_plan(app_ctx)
     now = datetime.utcnow()
-    res = client.get(f"/admin/reports/revenue?period=monthly&year={now.year}", headers=admin_h).get_json()
+    res = client.get(
+        f"/admin/reports/revenue?period=monthly&year={now.year}", headers=admin_h
+    ).get_json()
     month = res["revenue_data"][now.month - 1]
-    assert month["merchant_fees"] == 400.0 and month["revenue"] == 400.0 and month["transactions"] == 1
+    assert (
+        month["merchant_fees"] == 400.0
+        and month["revenue"] == 400.0
+        and month["transactions"] == 1
+    )
     assert res["total_revenue"] == 400.0
 
-    daily = client.get("/admin/reports/revenue?period=daily", headers=admin_h).get_json()
-    assert daily["revenue_data"][-1]["revenue"] == 400.0 and len(daily["revenue_data"]) == 30
+    daily = client.get(
+        "/admin/reports/revenue?period=daily", headers=admin_h
+    ).get_json()
+    assert (
+        daily["revenue_data"][-1]["revenue"] == 400.0
+        and len(daily["revenue_data"]) == 30
+    )
 
     # A late fee adds to revenue; waiving it takes it off again
     from app.models.instalment_payment import InstalmentPayment
     from app.services import ledger
     from app.extensions import db
+
     p = InstalmentPayment.query.filter_by(plan_id=plan.id, status="pending").first()
     ledger.late_fee_charged(plan, p, 80)
     db.session.commit()
-    month = client.get("/admin/reports/revenue", headers=admin_h).get_json()["revenue_data"][now.month - 1]
+    month = client.get("/admin/reports/revenue", headers=admin_h).get_json()[
+        "revenue_data"
+    ][now.month - 1]
     assert month["late_fees"] == 80.0 and month["revenue"] == 480.0
     ledger.late_fee_waived(plan, p, 80)
     db.session.commit()
-    assert client.get("/admin/reports/revenue", headers=admin_h).get_json()["revenue_data"][now.month - 1]["revenue"] == 400.0
+    assert (
+        client.get("/admin/reports/revenue", headers=admin_h).get_json()[
+            "revenue_data"
+        ][now.month - 1]["revenue"]
+        == 400.0
+    )
 
 
 def test_kpis_use_the_ledger(app_ctx):  # noqa: F811

@@ -8,6 +8,7 @@ from flask_restful import Resource, request
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
+from ..docs import MESSAGE, STR, api_doc, obj
 from ..extensions import db, guard, mail
 from ..models.user import User
 
@@ -15,19 +16,47 @@ from ..models.user import User
 # Only these fields can be set at sign-up. Status, KYC, IDs, commission and payout fields
 # are set by Tabital, never by the person registering. Admins are created with a CLI command.
 CUSTOMER_SIGNUP_FIELDS = {
-    'full_name', 'business_email', 'phone', 'dob', 'city', 'gps', 'address',
-    'designation', 'company', 'income_range', 'ref_name', 'ref_phone',
-    'ref_relationship', 'agree',
+    "full_name",
+    "business_email",
+    "phone",
+    "dob",
+    "city",
+    "gps",
+    "address",
+    "designation",
+    "company",
+    "income_range",
+    "ref_name",
+    "ref_phone",
+    "ref_relationship",
+    "agree",
 }
 MERCHANT_SIGNUP_FIELDS = {
-    'business_name', 'owner_name', 'phone', 'city', 'address', 'product_type',
-    'has_shop', 'shop_url', 'years_in_business', 'business_type', 'business_address',
-    'business_phone', 'business_email', 'description', 'agree',
+    "business_name",
+    "owner_name",
+    "phone",
+    "city",
+    "address",
+    "product_type",
+    "has_shop",
+    "shop_url",
+    "years_in_business",
+    "business_type",
+    "business_address",
+    "business_phone",
+    "business_email",
+    "description",
+    "agree",
 }
-SIGNUP_FIELDS = {'customer': CUSTOMER_SIGNUP_FIELDS, 'merchant': MERCHANT_SIGNUP_FIELDS}
+SIGNUP_FIELDS = {"customer": CUSTOMER_SIGNUP_FIELDS, "merchant": MERCHANT_SIGNUP_FIELDS}
 # Validated and converted separately (see resources/underwriting.py)
-CUSTOMER_UNDERWRITING_FIELDS = ('national_id', 'monthly_salary', 'employment_start_date',
-                                'salary_paid_to_bank', 'momo_number')
+CUSTOMER_UNDERWRITING_FIELDS = (
+    "national_id",
+    "monthly_salary",
+    "employment_start_date",
+    "salary_paid_to_bank",
+    "momo_number",
+)
 
 MIN_PASSWORD_LENGTH = 6
 OTP_TTL = timedelta(minutes=10)
@@ -45,32 +74,38 @@ class RegistrationError(ValueError):
 
 
 def register_user(data):
-    role = (data.get('role') or '').strip().lower()
+    role = (data.get("role") or "").strip().lower()
     if role not in SIGNUP_FIELDS:
-        raise RegistrationError('role', 'Role must be customer or merchant')
+        raise RegistrationError("role", "Role must be customer or merchant")
 
-    password = data.get('password') or ''
+    password = data.get("password") or ""
     if len(password) < MIN_PASSWORD_LENGTH:
-        raise RegistrationError('password', f'Password must be at least {MIN_PASSWORD_LENGTH} characters')
-    if not (data.get('phone') or '').strip():
-        raise RegistrationError('phone', 'Phone number is required')
+        raise RegistrationError(
+            "password", f"Password must be at least {MIN_PASSWORD_LENGTH} characters"
+        )
+    if not (data.get("phone") or "").strip():
+        raise RegistrationError("phone", "Phone number is required")
 
     fields = {k: v for k, v in data.items() if k in SIGNUP_FIELDS[role]}
-    if fields.get('business_email'):
-        fields['business_email'] = fields['business_email'].strip().lower()
+    if fields.get("business_email"):
+        fields["business_email"] = fields["business_email"].strip().lower()
 
-    if role == 'customer':
+    if role == "customer":
         # Underwriting details (Phase 3); the salary is verified later by Tabital, never at sign-up
         from ..resources.underwriting import FieldError, normalize_underwriting_fields
+
         try:
-            fields.update(normalize_underwriting_fields(
-                {k: data[k] for k in CUSTOMER_UNDERWRITING_FIELDS if k in data}))
+            fields.update(
+                normalize_underwriting_fields(
+                    {k: data[k] for k in CUSTOMER_UNDERWRITING_FIELDS if k in data}
+                )
+            )
         except FieldError as e:
             raise RegistrationError(e.field, e.message)
 
     user = User(**fields)
     user.role = role
-    user.status = 'pending'
+    user.status = "pending"
     user.password = guard.hash_password(password)
 
     try:
@@ -81,13 +116,29 @@ def register_user(data):
     except IntegrityError as e:
         db.session.rollback()
         error_message = str(e.orig).lower() if e.orig else str(e).lower()
-        if 'business_email' in error_message:
-            raise RegistrationError('business_email', 'This email address is already registered. Please use a different email or login.', 409)
-        if 'momo_number' in error_message:
-            raise RegistrationError('momo_number', 'This Mobile Money number is already linked to another account.', 409)
-        if 'phone' in error_message:
-            raise RegistrationError('phone', 'This phone number is already registered. Please use a different number or login.', 409)
-        raise RegistrationError('general', 'Registration failed. The information you provided may already be registered.', 409)
+        if "business_email" in error_message:
+            raise RegistrationError(
+                "business_email",
+                "This email address is already registered. Please use a different email or login.",
+                409,
+            )
+        if "momo_number" in error_message:
+            raise RegistrationError(
+                "momo_number",
+                "This Mobile Money number is already linked to another account.",
+                409,
+            )
+        if "phone" in error_message:
+            raise RegistrationError(
+                "phone",
+                "This phone number is already registered. Please use a different number or login.",
+                409,
+            )
+        raise RegistrationError(
+            "general",
+            "Registration failed. The information you provided may already be registered.",
+            409,
+        )
 
 
 class AuthError(Exception):
@@ -100,11 +151,12 @@ class AuthError(Exception):
 def _signup_fraud_checks(user):
     """Duplicate Ghana Card / MoMo and device checks (§9D). They flag for review, never block sign-up."""
     from . import fraud
+
     try:
         fraud.record_device(user)
         fraud.check_duplicates(user)
         db.session.commit()
-    except Exception:                      # noqa: BLE001
+    except Exception:  # noqa: BLE001
         db.session.rollback()
         current_app.logger.exception("Fraud checks failed at sign-up")
 
@@ -120,14 +172,14 @@ def login_user(identifier, password):
     from . import attempts
     from ..models.login_attempt import LoginAttempt
 
-    identifier = (identifier or '').strip()
+    identifier = (identifier or "").strip()
     if not identifier or not password:
-        raise AuthError('Phone and password are required', 400)
+        raise AuthError("Phone and password are required", 400)
 
     key = identifier.lower()
     cfg = current_app.config
     now = datetime.utcnow()
-    window = now - timedelta(minutes=cfg.get('LOGIN_WINDOW_MINUTES', 15))
+    window = now - timedelta(minutes=cfg.get("LOGIN_WINDOW_MINUTES", 15))
     ip = attempts.client_ip()
 
     user = User.query.filter(
@@ -136,41 +188,60 @@ def login_user(identifier, password):
     subject = attempts.subject_for(user, key)
 
     attempt = attempts.begin(LoginAttempt.LOGIN, subject, key, ip, now)
-    if (attempts.failures(LoginAttempt.LOGIN, subject, window) > cfg.get('LOGIN_MAX_FAILURES', 5)
-            or attempts.ip_spraying(LoginAttempt.LOGIN, ip, subject, window,
-                                    cfg.get('LOGIN_MAX_ACCOUNTS_PER_IP', 20))):
+    if attempts.failures(LoginAttempt.LOGIN, subject, window) > cfg.get(
+        "LOGIN_MAX_FAILURES", 5
+    ) or attempts.ip_spraying(
+        LoginAttempt.LOGIN,
+        ip,
+        subject,
+        window,
+        cfg.get("LOGIN_MAX_ACCOUNTS_PER_IP", 20),
+    ):
         # A refused try isn't counted (it was only written so parallel requests see each other),
         # so waiting out the window always works
         attempts.discard(attempt)
-        minutes = cfg.get('LOGIN_WINDOW_MINUTES', 15)
-        raise AuthError(f'Too many failed attempts. Please wait {minutes} minutes and try again, '
-                        'or reset your password.', 429)
+        minutes = cfg.get("LOGIN_WINDOW_MINUTES", 15)
+        raise AuthError(
+            f"Too many failed attempts. Please wait {minutes} minutes and try again, "
+            "or reset your password.",
+            429,
+        )
 
     if user:
         ok = guard.pwd_ctx.verify(password, user.password)
     else:
-        guard.pwd_ctx.dummy_verify()       # same time taken, so unknown accounts can't be told apart
+        guard.pwd_ctx.dummy_verify()  # same time taken, so unknown accounts can't be told apart
         ok = False
     if not ok:
-        raise AuthError('Invalid phone or password', 401)
+        raise AuthError("Invalid phone or password", 401)
     attempts.succeed(attempt)
     # Restricted accounts can still sign in to pay what they owe (they can't buy: customer_purchase.py)
-    if user.status not in ('approved', 'active', 'restricted'):
-        raise AuthError('Account not approved yet. Please wait for admin approval.', 403)
+    if user.status not in ("approved", "active", "restricted"):
+        raise AuthError(
+            "Account not approved yet. Please wait for admin approval.", 403
+        )
 
     return guard.encode_jwt_token(user)
 
 
 def _generic_reset_response():
     # Same response whether or not the account exists, so the endpoint can't be used to find accounts
-    return {"message": "If your account exists, you will receive a password reset email"}, 200
+    return {
+        "message": "If your account exists, you will receive a password reset email"
+    }, 200
 
 
 class ForgotPasswordResource(Resource):
+    @api_doc(
+        "Email a password-reset code",
+        description="Answers the same whether or not the account exists, so it can't be used to find accounts.",
+        body=obj({"email": STR}, required=["email"]),
+        responses={200: ("Sent, if the account exists", MESSAGE), 400: "Email missing"},
+    )
     def post(self):
         """Request password reset - sends OTP to user's email"""
         data = request.get_json() or {}
-        email = (data.get('email') or '').strip().lower()
+        email = (data.get("email") or "").strip().lower()
 
         if not email:
             return {"error": "Email address is required"}, 400
@@ -179,11 +250,13 @@ class ForgotPasswordResource(Resource):
         # can't be used to flood someone's inbox
         from . import attempts
         from ..models.login_attempt import LoginAttempt
+
         ip = attempts.client_ip()
         hour_ago = datetime.utcnow() - timedelta(hours=1)
         attempts.begin(LoginAttempt.RESET, f"ip:{ip}", email, ip)
-        if ip and attempts.failures(LoginAttempt.RESET, f"ip:{ip}", hour_ago) > \
-                current_app.config.get('RESET_REQUESTS_PER_IP_PER_HOUR', 10):
+        if ip and attempts.failures(
+            LoginAttempt.RESET, f"ip:{ip}", hour_ago
+        ) > current_app.config.get("RESET_REQUESTS_PER_IP_PER_HOUR", 10):
             return _generic_reset_response()
 
         user = User.query.filter_by(business_email=email).first()
@@ -192,22 +265,40 @@ class ForgotPasswordResource(Resource):
 
         now = datetime.utcnow()
         # Throttle: one code per minute
-        if user.reset_otp_expiry and user.reset_otp_expiry - OTP_TTL + OTP_RESEND_AFTER > now:
+        if (
+            user.reset_otp_expiry
+            and user.reset_otp_expiry - OTP_TTL + OTP_RESEND_AFTER > now
+        ):
             return _generic_reset_response()
         # At most RESET_CODES_PER_ACCOUNT_PER_DAY codes a day for one account: with 5 guesses per code
         # that bounds guessing from many addresses (the owner is emailed every code, so it's visible)
-        issued_today = LoginAttempt.query.filter(LoginAttempt.kind == LoginAttempt.RESET,
-                                                 LoginAttempt.subject == attempts.subject_for(user, email),
-                                                 LoginAttempt.created_at >= now - timedelta(days=1)).count()
+        issued_today = LoginAttempt.query.filter(
+            LoginAttempt.kind == LoginAttempt.RESET,
+            LoginAttempt.subject == attempts.subject_for(user, email),
+            LoginAttempt.created_at >= now - timedelta(days=1),
+        ).count()
         # The owner asking from an address they've signed in from before still gets a code, so someone
         # using up the allowance can't lock them out
-        known_address = bool(ip) and LoginAttempt.query.filter(
-            LoginAttempt.kind == LoginAttempt.LOGIN, LoginAttempt.subject == attempts.subject_for(user, email),
-            LoginAttempt.ip == ip, LoginAttempt.success.is_(True),
-            LoginAttempt.created_at >= now - timedelta(days=30)).first() is not None
-        if issued_today >= current_app.config.get('RESET_CODES_PER_ACCOUNT_PER_DAY', 10) and not known_address:
+        known_address = (
+            bool(ip)
+            and LoginAttempt.query.filter(
+                LoginAttempt.kind == LoginAttempt.LOGIN,
+                LoginAttempt.subject == attempts.subject_for(user, email),
+                LoginAttempt.ip == ip,
+                LoginAttempt.success.is_(True),
+                LoginAttempt.created_at >= now - timedelta(days=30),
+            ).first()
+            is not None
+        )
+        if (
+            issued_today
+            >= current_app.config.get("RESET_CODES_PER_ACCOUNT_PER_DAY", 10)
+            and not known_address
+        ):
             return _generic_reset_response()
-        attempts.begin(LoginAttempt.RESET, attempts.subject_for(user, email), email, ip, now)
+        attempts.begin(
+            LoginAttempt.RESET, attempts.subject_for(user, email), email, ip, now
+        )
 
         otp = f"{secrets.randbelow(1_000_000):06d}"
         user.reset_otp = otp
@@ -295,7 +386,7 @@ class ForgotPasswordResource(Resource):
                     </div>
                 </body>
                 </html>
-                """
+                """,
             )
             _send_in_background(msg)
         except Exception:
@@ -309,8 +400,9 @@ class ForgotPasswordResource(Resource):
 def _send_in_background(msg):
     """Send without making the request wait, so a real account answers as fast as an unknown one."""
     import threading
+
     app = current_app._get_current_object()
-    if app.config.get('TESTING'):
+    if app.config.get("TESTING"):
         mail.send(msg)
         return
 
@@ -318,17 +410,29 @@ def _send_in_background(msg):
         with app.app_context():
             try:
                 mail.send(msg)
-            except Exception:              # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 app.logger.exception("Failed to send password reset email")
+
     threading.Thread(target=run, daemon=True).start()
 
 
 class VerifyResetOTPResource(Resource):
+    @api_doc(
+        "Check the emailed code and get a reset token",
+        description="One answer (401) for every failure, so it can't be used to find accounts.",
+        body=obj({"email": STR, "otp": STR}, required=["email", "otp"]),
+        responses={
+            200: ("Code accepted", obj({"message": STR, "reset_token": STR})),
+            400: "Email or code missing",
+            401: "Code is wrong or has expired",
+            429: "Too many attempts",
+        },
+    )
     def post(self):
         """Verify OTP and return reset token"""
         data = request.get_json() or {}
-        email = (data.get('email') or '').strip().lower()
-        otp = str(data.get('otp') or '').strip()
+        email = (data.get("email") or "").strip().lower()
+        otp = str(data.get("otp") or "").strip()
 
         if not email or not otp:
             return {"error": "Email and OTP are required"}, 400
@@ -339,12 +443,23 @@ class VerifyResetOTPResource(Resource):
         # address across accounts is refused (services/attempts.py).
         from . import attempts
         from ..models.login_attempt import LoginAttempt
-        bad = ({"error": "That code is wrong or has expired. Request a new code and try again."}, 401)
+
+        bad = (
+            {
+                "error": "That code is wrong or has expired. Request a new code and try again."
+            },
+            401,
+        )
         cfg = current_app.config
         now = datetime.utcnow()
         ip = attempts.client_ip()
         user = User.query.filter_by(business_email=email).first()
-        active = bool(user and user.reset_otp and user.reset_otp_expiry and user.reset_otp_expiry >= now)
+        active = bool(
+            user
+            and user.reset_otp
+            and user.reset_otp_expiry
+            and user.reset_otp_expiry >= now
+        )
         # Guesses against a real, issued code count on the account. Anything else (unknown email, no
         # code) counts on the caller's address, so a stranger can't use up the owner's daily quota.
         subject = attempts.subject_for(user, email) if active else f"ip:{ip}"
@@ -353,17 +468,22 @@ class VerifyResetOTPResource(Resource):
         day = now - timedelta(days=1)
         # Daily cap per (account, address): a stranger using up their own allowance doesn't lock the
         # owner out. Guessing one code from many addresses is stopped by the per-code limit below.
-        if (attempts.failures(LoginAttempt.OTP, subject, day, ip=ip) > cfg.get('OTP_MAX_FAILURES_PER_DAY', 10)
-                or attempts.ip_spraying(LoginAttempt.OTP, ip, subject, day, cfg.get('OTP_MAX_ACCOUNTS_PER_IP', 10))):
+        if attempts.failures(LoginAttempt.OTP, subject, day, ip=ip) > cfg.get(
+            "OTP_MAX_FAILURES_PER_DAY", 10
+        ) or attempts.ip_spraying(
+            LoginAttempt.OTP, ip, subject, day, cfg.get("OTP_MAX_ACCOUNTS_PER_IP", 10)
+        ):
             attempts.discard(attempt)
-            return {"error": "Too many attempts. Please try again tomorrow or contact support."}, 429
+            return {
+                "error": "Too many attempts. Please try again tomorrow or contact support."
+            }, 429
 
         if not active:
-            hmac.compare_digest("000000", otp)          # same work either way
+            hmac.compare_digest("000000", otp)  # same work either way
             return bad
         issued = user.reset_otp_expiry - OTP_TTL
         if attempts.failures(LoginAttempt.OTP, subject, issued) > OTP_MAX_ATTEMPTS:
-            user.reset_otp = None                         # this code is used up
+            user.reset_otp = None  # this code is used up
             db.session.commit()
             return bad
         if not hmac.compare_digest(user.reset_otp, otp):
@@ -378,22 +498,37 @@ class VerifyResetOTPResource(Resource):
 
         return {
             "message": "OTP verified successfully",
-            "reset_token": user.reset_token
+            "reset_token": user.reset_token,
         }, 200
 
 
 class ResetPasswordResource(Resource):
+    @api_doc(
+        "Set a new password with the reset token",
+        body=obj(
+            {"reset_token": STR, "new_password": {"type": "string", "minLength": 6}},
+            required=["reset_token", "new_password"],
+        ),
+        responses={
+            200: "Password changed",
+            400: "Token or password missing, or password too short",
+            401: "Reset token has expired",
+            404: "Invalid reset token",
+        },
+    )
     def post(self):
         """Reset password using token"""
         data = request.get_json() or {}
-        reset_token = data.get('reset_token')
-        new_password = data.get('new_password') or ''
+        reset_token = data.get("reset_token")
+        new_password = data.get("new_password") or ""
 
         if not reset_token or not new_password:
             return {"error": "Reset token and new password are required"}, 400
 
         if len(new_password) < MIN_PASSWORD_LENGTH:
-            return {"error": f"Password must be at least {MIN_PASSWORD_LENGTH} characters"}, 400
+            return {
+                "error": f"Password must be at least {MIN_PASSWORD_LENGTH} characters"
+            }, 400
 
         user = User.query.filter_by(reset_token=reset_token).first()
         if not user:
@@ -411,6 +546,7 @@ class ResetPasswordResource(Resource):
         db.session.commit()
         # A lock from failed sign-ins can't keep the owner out after they've proved it's them
         from . import attempts
+
         attempts.clear(user)
 
         recipient = user.business_email or user.email
@@ -437,11 +573,13 @@ class ResetPasswordResource(Resource):
                         </div>
                     </body>
                     </html>
-                    """
+                    """,
                 )
                 mail.send(msg)
             except Exception:
-                current_app.logger.exception("Failed to send password change confirmation")
+                current_app.logger.exception(
+                    "Failed to send password change confirmation"
+                )
 
         return {"message": "Password reset successfully. You can now login."}, 200
 
@@ -453,7 +591,9 @@ def change_password(user, current_password, new_password):
     if not guard.pwd_ctx.verify(current_password, user.password):
         return {"error": "Current password is incorrect"}, 401
     if len(new_password) < MIN_PASSWORD_LENGTH:
-        return {"error": f"New password must be at least {MIN_PASSWORD_LENGTH} characters"}, 400
+        return {
+            "error": f"New password must be at least {MIN_PASSWORD_LENGTH} characters"
+        }, 400
     user.password = guard.hash_password(new_password)
     db.session.commit()
     return {"message": "Password updated successfully"}, 200

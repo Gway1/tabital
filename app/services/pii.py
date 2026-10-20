@@ -9,18 +9,33 @@ Masked values contain MASK_CHAR, so code that saves data refuses them (see is_ma
 """
 import re
 
-MASK_CHAR = "•"   # •
+MASK_CHAR = "•"  # •
 
 # Response keys that hold personal identifiers
 CARD_KEYS = {"national_id", "id_number", "ghana_card", "ghana_card_number"}
-PHONE_KEYS = {"phone", "customer_phone", "merchant_phone", "business_phone", "momo_number", "ref_phone",
-              "phone_number", "user_phone", "mobile_money_number", "to_address"}
+PHONE_KEYS = {
+    "phone",
+    "customer_phone",
+    "merchant_phone",
+    "business_phone",
+    "momo_number",
+    "ref_phone",
+    "phone_number",
+    "user_phone",
+    "mobile_money_number",
+    "to_address",
+}
 ACCOUNT_KEYS = {"account_number", "bank_account", "bank_account_number"}
 
 # What an admin may reveal, per user field
-REVEALABLE = {"national_id": "Ghana Card", "phone": "Phone", "momo_number": "Mobile Money number",
-              "account_number": "Bank account number", "business_phone": "Business phone",
-              "ref_phone": "Referee phone"}
+REVEALABLE = {
+    "national_id": "Ghana Card",
+    "phone": "Phone",
+    "momo_number": "Mobile Money number",
+    "account_number": "Bank account number",
+    "business_phone": "Business phone",
+    "ref_phone": "Referee phone",
+}
 
 
 def is_masked(value) -> bool:
@@ -76,7 +91,10 @@ def mask_value(key: str, value):
 def mask_payload(obj):
     """Walk JSON-like data and mask personal identifiers by key."""
     if isinstance(obj, dict):
-        return {k: (mask_value(k, v) if isinstance(v, str) else mask_payload(v)) for k, v in obj.items()}
+        return {
+            k: (mask_value(k, v) if isinstance(v, str) else mask_payload(v))
+            for k, v in obj.items()
+        }
     if isinstance(obj, list):
         return [mask_payload(v) for v in obj]
     return obj

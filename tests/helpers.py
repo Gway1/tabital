@@ -19,6 +19,6 @@ def eligible_customer(extra, phone):
         "employment_start_date": date(2020, 1, 1),
         "salary_paid_to_bank": True,
         "momo_number": phone,
-        "employment_verified_at": datetime(2026, 1, 5),      # §9B, Phase 6
+        "employment_verified_at": datetime(2026, 1, 5),  # §9B, Phase 6
     }
     return {**defaults, **extra}

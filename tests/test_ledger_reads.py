@@ -19,9 +19,17 @@ def world():
         db.create_all()
         client, admin_headers, plan = approved_plan(app)
         # Pay instalment 2 so there's a mix of paid and unpaid
-        p2 = InstalmentPayment.query.filter_by(plan_id=plan.id, installment_number=2).one()
-        assert client.put(f"/admin/instalments/payments/{p2.id}/mark-paid", headers=admin_headers,
-                          json={"payment_reference": "MOMO-2"}).status_code == 200
+        p2 = InstalmentPayment.query.filter_by(
+            plan_id=plan.id, installment_number=2
+        ).one()
+        assert (
+            client.put(
+                f"/admin/instalments/payments/{p2.id}/mark-paid",
+                headers=admin_headers,
+                json={"payment_reference": "MOMO-2"},
+            ).status_code
+            == 200
+        )
         customer = User.query.filter_by(role="customer").one()
         merchant = User.query.filter_by(role="merchant").one()
         yield {
@@ -39,7 +47,9 @@ def world():
 
 def get(w, who, url):
     res = w["client"].get(url, headers=w[who])
-    assert res.status_code < 500, f"{url} -> {res.status_code}: {res.get_data(as_text=True)[:500]}"
+    assert (
+        res.status_code < 500
+    ), f"{url} -> {res.status_code}: {res.get_data(as_text=True)[:500]}"
     return res
 
 
@@ -47,7 +57,7 @@ def test_admin_screens_use_ledger(world):
     w = world
     plan = w["plan"]
     stats = get(w, "admin", "/admin/instalments/stats").get_json()
-    assert stats["total_outstanding"] == 1600.0      # 4,050 - 1,650 - 800
+    assert stats["total_outstanding"] == 1600.0  # 4,050 - 1,650 - 800
     assert stats["total_paid"] == 2450.0
 
     listing = get(w, "admin", "/admin/instalments").get_json()
@@ -62,7 +72,7 @@ def test_admin_screens_use_ledger(world):
     assert "error" not in merchant
 
     dash = get(w, "admin", "/admin/dashboard/stats").get_json()
-    assert dash["stats"]["revenue_mtd"] == 400.0       # 10% MDR on GHS 4,000
+    assert dash["stats"]["revenue_mtd"] == 400.0  # 10% MDR on GHS 4,000
     assert dash["portfolio"]["total_exposure"] == 1600.0
     assert dash["alerts"]["chargebacks"] == 0
 

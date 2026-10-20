@@ -6,17 +6,19 @@ from ..extensions import db
 
 
 class RiskAssessment(db.Model):
-    __tablename__ = 'risk_assessments'
+    __tablename__ = "risk_assessments"
 
     # source values
-    KYC_APPROVAL = 'kyc_approval'
-    PURCHASE = 'purchase'
-    CUSTOMER_VIEW = 'customer_view'
-    ADMIN_RERUN = 'admin_rerun'
-    ADMIN_OVERRIDE = 'admin_override'
+    KYC_APPROVAL = "kyc_approval"
+    PURCHASE = "purchase"
+    CUSTOMER_VIEW = "customer_view"
+    ADMIN_RERUN = "admin_rerun"
+    ADMIN_OVERRIDE = "admin_override"
 
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    user_id = db.Column(
+        db.Integer, db.ForeignKey("users.id"), nullable=False, index=True
+    )
     source = db.Column(db.String(30), nullable=False)
     eligible = db.Column(db.Boolean, nullable=False)
     tier = db.Column(db.String(10))
@@ -26,11 +28,11 @@ class RiskAssessment(db.Model):
     outstanding = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     available_limit = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     extended_plans_eligible = db.Column(db.Boolean, default=False)
-    reasons = db.Column(db.Text)          # JSON list of strings
-    inputs = db.Column(db.Text)           # JSON of the Facts used
+    reasons = db.Column(db.Text)  # JSON list of strings
+    inputs = db.Column(db.Text)  # JSON of the Facts used
     rules_version = db.Column(db.String(40), nullable=False)
-    note = db.Column(db.String(255))      # e.g. the admin's reason for an override
-    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    note = db.Column(db.String(255))  # e.g. the admin's reason for an override
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     def reasons_list(self):
@@ -43,7 +45,9 @@ class RiskAssessment(db.Model):
             "source": self.source,
             "eligible": self.eligible,
             "tier": self.tier,
-            "pay_in_4_down_payment_percent": f(self.pay_in_4_dp_rate * 100) if self.pay_in_4_dp_rate is not None else None,
+            "pay_in_4_down_payment_percent": f(self.pay_in_4_dp_rate * 100)
+            if self.pay_in_4_dp_rate is not None
+            else None,
             "limit_multiplier": f(self.limit_multiplier),
             "credit_limit": f(self.credit_limit),
             "outstanding": f(self.outstanding),

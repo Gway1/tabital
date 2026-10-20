@@ -26,7 +26,10 @@ class SmileIDError(Exception):
 
 
 def is_configured() -> bool:
-    return bool(current_app.config.get("SMILEID_PARTNER_ID") and current_app.config.get("SMILEID_API_KEY"))
+    return bool(
+        current_app.config.get("SMILEID_PARTNER_ID")
+        and current_app.config.get("SMILEID_API_KEY")
+    )
 
 
 def _partner_id():
@@ -44,7 +47,10 @@ def _api_key():
 
 
 def base_url():
-    return (current_app.config.get("SMILEID_BASE_URL") or "https://testapi.smileidentity.com").rstrip("/")
+    return (
+        current_app.config.get("SMILEID_BASE_URL")
+        or "https://testapi.smileidentity.com"
+    ).rstrip("/")
 
 
 def mint_token(*, user_ref, product, payload, partner_params=None):
@@ -59,12 +65,18 @@ def mint_token(*, user_ref, product, payload, partner_params=None):
         "payload": json.dumps(payload),
     }
     if partner_params:
-        form["partner_params"] = json.dumps({k: str(v) for k, v in partner_params.items()})
+        form["partner_params"] = json.dumps(
+            {k: str(v) for k, v in partner_params.items()}
+        )
     headers = {"smileid-partner-id": _partner_id(), "smileid-api-key": _api_key()}
     try:
         # multipart/form-data, as the token endpoint requires
-        res = requests.post(f"{base_url()}/v3/token", files={k: (None, v) for k, v in form.items()},
-                            headers=headers, timeout=TIMEOUT_SECONDS)
+        res = requests.post(
+            f"{base_url()}/v3/token",
+            files={k: (None, v) for k, v in form.items()},
+            headers=headers,
+            timeout=TIMEOUT_SECONDS,
+        )
         body = res.json()
     except (requests.RequestException, ValueError) as e:
         raise SmileIDError(f"Could not reach Smile ID: {e}")
@@ -78,7 +90,9 @@ def job_status(job_id):
     token = mint_token(user_ref="status-check", product="biometric_kyc", payload={})
     headers = {"SmileID-Partner-ID": _partner_id(), "SmileID-Token": token}
     try:
-        res = requests.get(f"{base_url()}/v3/status/{job_id}", headers=headers, timeout=TIMEOUT_SECONDS)
+        res = requests.get(
+            f"{base_url()}/v3/status/{job_id}", headers=headers, timeout=TIMEOUT_SECONDS
+        )
         body = res.json()
     except (requests.RequestException, ValueError) as e:
         raise SmileIDError(f"Could not reach Smile ID: {e}")
@@ -90,7 +104,9 @@ def job_status(job_id):
 def expected_signature(timestamp: str) -> str:
     """base64(HMAC-SHA256(api_key, timestamp + partner_id + "sid_request"))."""
     message = f"{timestamp}{_partner_id()}sid_request".encode()
-    return base64.b64encode(hmac.new(_api_key().encode(), message, hashlib.sha256).digest()).decode()
+    return base64.b64encode(
+        hmac.new(_api_key().encode(), message, hashlib.sha256).digest()
+    ).decode()
 
 
 def verify_webhook(timestamp, signature, now=None) -> bool:

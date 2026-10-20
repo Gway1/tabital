@@ -21,7 +21,9 @@ def _plan_and_payment(customer, plan_id, payment_id=None):
     if not plan:
         return None, None
     if payment_id:
-        payment = InstalmentPayment.query.filter_by(id=payment_id, plan_id=plan.id).first()
+        payment = InstalmentPayment.query.filter_by(
+            id=payment_id, plan_id=plan.id
+        ).first()
     else:
         payment = next_payable_instalment(plan)
     return plan, payment
@@ -32,14 +34,20 @@ class CustomerDefermentResource(Resource):
     def get(self, plan_id):
         """Fee, new dates and new total for deferring an instalment (shown before the customer agrees)."""
         customer = current_user()
-        if customer.role != 'customer':
+        if customer.role != "customer":
             return {"error": "Unauthorized"}, 403
-        plan, payment = _plan_and_payment(customer, plan_id, request.args.get('payment_id', type=int))
+        plan, payment = _plan_and_payment(
+            customer, plan_id, request.args.get("payment_id", type=int)
+        )
         if not plan:
             return {"error": "Instalment plan not found"}, 404
         body = deferment.quote(plan, payment)
-        body["history"] = [d.to_dict() for d in Deferment.query.filter_by(plan_id=plan.id)
-                           .order_by(Deferment.created_at.desc()).all()]
+        body["history"] = [
+            d.to_dict()
+            for d in Deferment.query.filter_by(plan_id=plan.id)
+            .order_by(Deferment.created_at.desc())
+            .all()
+        ]
         body["online_payment"] = paystack.is_configured()
         return body, 200
 
@@ -47,57 +55,93 @@ class CustomerDefermentResource(Resource):
     def post(self, plan_id):
         """Start paying the deferment fee. The dates move once Paystack confirms the payment."""
         customer = current_user()
-        if customer.role != 'customer':
+        if customer.role != "customer":
             return {"error": "Unauthorized"}, 403
         data = request.get_json() or {}
-        plan, payment = _plan_and_payment(customer, plan_id, data.get('payment_id'))
+        plan, payment = _plan_and_payment(customer, plan_id, data.get("payment_id"))
         if not plan:
             return {"error": "Instalment plan not found"}, 404
-        if not data.get('agree'):
-            return {"error": "Please agree to the deferment fee and the new payment dates"}, 400
+        if not data.get("agree"):
+            return {
+                "error": "Please agree to the deferment fee and the new payment dates"
+            }, 400
         reasons = deferment.reasons_not_allowed(plan, payment)
         if reasons:
             return {"error": reasons[0], "reasons": reasons}, 400
         if not paystack.is_configured():
-            return {"error": "Online payment isn't available right now. Please try again later."}, 503
+            return {
+                "error": "Online payment isn't available right now. Please try again later."
+            }, 503
 
         amount_pesewas = to_pesewas(deferment.fee_for(payment))
         intent = PaymentIntent(
             reference=f"TBD-{plan.id}-{payment.installment_number}-{uuid.uuid4().hex[:12]}",
-            purpose=PaymentIntent.DEFERMENT_FEE, plan_id=plan.id, payment_id=payment.id,
-            customer_id=customer.id, amount_pesewas=amount_pesewas, currency='GHS',
+            purpose=PaymentIntent.DEFERMENT_FEE,
+            plan_id=plan.id,
+            payment_id=payment.id,
+            customer_id=customer.id,
+            amount_pesewas=amount_pesewas,
+            currency="GHS",
         )
         db.session.add(intent)
         db.session.flush()
         try:
             result = paystack.initialize_transaction(
-                email=_customer_email(customer), amount_pesewas=amount_pesewas, reference=intent.reference,
+                email=_customer_email(customer),
+                amount_pesewas=amount_pesewas,
+                reference=intent.reference,
                 callback_url=current_app.config.get("PAYSTACK_CALLBACK_URL"),
-                metadata={"plan_id": plan.id, "installment_number": payment.installment_number,
-                          "customer_id": customer.id, "purpose": "deferment_fee"},
+                metadata={
+                    "plan_id": plan.id,
+                    "installment_number": payment.installment_number,
+                    "customer_id": customer.id,
+                    "purpose": "deferment_fee",
+                },
             )
         except paystack.PaystackError as e:
             db.session.rollback()
             current_app.logger.warning("Paystack initialize (deferment) failed: %s", e)
             return {"error": "Could not start the payment. Please try again."}, 502
         db.session.commit()
-        return {"reference": intent.reference, "authorization_url": result.get("authorization_url"),
-                "amount": amount_pesewas / 100, "currency": "GHS",
-                "installment_number": payment.installment_number}, 201
+        return {
+            "reference": intent.reference,
+            "authorization_url": result.get("authorization_url"),
+            "amount": amount_pesewas / 100,
+            "currency": "GHS",
+            "installment_number": payment.installment_number,
+        }, 201
 
 
 class AdminDefermentsResource(Resource):
     @auth_required
     def get(self):
-        if current_user().role != 'admin':
+        if current_user().role != "admin":
             return {"error": "Unauthorized"}, 403
         q = Deferment.query
-        if request.args.get('status'):
-            q = q.filter(Deferment.status == request.args['status'])
+        if request.args.get("status"):
+            q = q.filter(Deferment.status == request.args["status"])
         rows = q.order_by(Deferment.created_at.desc()).limit(200).all()
-        plans = {p.id: p for p in InstalmentPlan.query.filter(InstalmentPlan.id.in_([d.plan_id for d in rows])).all()} \
-            if rows else {}
-        return {"deferments": [{**d.to_dict(),
-                                "plan_ref": plans[d.plan_id].plan_id if d.plan_id in plans else None,
-                                "customer_name": plans[d.plan_id].customer_name if d.plan_id in plans else None}
-                               for d in rows]}, 200
+        plans = (
+            {
+                p.id: p
+                for p in InstalmentPlan.query.filter(
+                    InstalmentPlan.id.in_([d.plan_id for d in rows])
+                ).all()
+            }
+            if rows
+            else {}
+        )
+        return {
+            "deferments": [
+                {
+                    **d.to_dict(),
+                    "plan_ref": plans[d.plan_id].plan_id
+                    if d.plan_id in plans
+                    else None,
+                    "customer_name": plans[d.plan_id].customer_name
+                    if d.plan_id in plans
+                    else None,
+                }
+                for d in rows
+            ]
+        }, 200

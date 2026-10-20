@@ -32,11 +32,24 @@ def test_initialize_sends_pesewas_ghs_and_channels(app_ctx, monkeypatch):
 
     def fake_post(url, json=None, headers=None, timeout=None):
         calls.update(url=url, json=json, headers=headers, timeout=timeout)
-        return FakeResponse(200, {"status": True, "data": {"authorization_url": "https://x", "reference": json["reference"]}})
+        return FakeResponse(
+            200,
+            {
+                "status": True,
+                "data": {
+                    "authorization_url": "https://x",
+                    "reference": json["reference"],
+                },
+            },
+        )
 
     monkeypatch.setattr(paystack.requests, "post", fake_post)
-    data = paystack.initialize_transaction(email="a@b.com", amount_pesewas=165000, reference="TBP-1",
-                                           callback_url="http://localhost:4200/customer/payment-callback")
+    data = paystack.initialize_transaction(
+        email="a@b.com",
+        amount_pesewas=165000,
+        reference="TBP-1",
+        callback_url="http://localhost:4200/customer/payment-callback",
+    )
     assert calls["url"] == "https://api.paystack.co/transaction/initialize"
     assert calls["json"]["amount"] == 165000
     assert calls["json"]["currency"] == "GHS"
@@ -47,8 +60,13 @@ def test_initialize_sends_pesewas_ghs_and_channels(app_ctx, monkeypatch):
 
 
 def test_errors_raise_paystack_error(app_ctx, monkeypatch):
-    monkeypatch.setattr(paystack.requests, "get",
-                        lambda *a, **k: FakeResponse(400, {"status": False, "message": "Transaction reference not found"}))
+    monkeypatch.setattr(
+        paystack.requests,
+        "get",
+        lambda *a, **k: FakeResponse(
+            400, {"status": False, "message": "Transaction reference not found"}
+        ),
+    )
     with pytest.raises(paystack.PaystackError, match="not found"):
         paystack.verify_transaction("nope")
 
@@ -58,13 +76,15 @@ def test_refund_posts_transaction_reference(app_ctx, monkeypatch):
 
     def fake_post(url, json=None, headers=None, timeout=None):
         calls.update(url=url, json=json)
-        return FakeResponse(200, {"status": True, "data": {"id": 42, "status": "pending"}})
+        return FakeResponse(
+            200, {"status": True, "data": {"id": 42, "status": "pending"}}
+        )
 
     monkeypatch.setattr(paystack.requests, "post", fake_post)
     data = paystack.refund_transaction("TBO-1-abc", reason="Order rejected")
     assert calls["url"] == "https://api.paystack.co/refund"
     assert calls["json"]["transaction"] == "TBO-1-abc"
-    assert "amount" not in calls["json"]        # full refund
+    assert "amount" not in calls["json"]  # full refund
     assert data["id"] == 42
 
 

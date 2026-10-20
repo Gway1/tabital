@@ -6,17 +6,20 @@ from ..models.notification_settings import NotificationSetting
 from ..extensions import db
 from datetime import datetime
 
-def safe_str(v): return v if v is not None else ""
+
+def safe_str(v):
+    return v if v is not None else ""
+
 
 class CustomerGetPreferencesResource(Resource):
     @auth_required
     def get(self):
         """Get customer preferences"""
         current_customer = current_user()
-        
+
         if current_customer.role != "customer":
             return {"error": "Unauthorized"}, 403
-        
+
         # Return default preferences
         # You can store these in a separate table if needed
         return {
@@ -25,7 +28,7 @@ class CustomerGetPreferencesResource(Resource):
             "currency": "GHS",
             "date_format": "DD/MM/YYYY",
             "dashboard_layout": "default",
-            "items_per_page": 20
+            "items_per_page": 20,
         }
 
 
@@ -34,13 +37,13 @@ class CustomerUpdatePreferencesResource(Resource):
     def put(self):
         """Update customer preferences"""
         current_customer = current_user()
-        
+
         if current_customer.role != "customer":
             return {"error": "Unauthorized"}, 403
-        
+
         data = request.get_json()
-        
+
         # In production, save to a preferences table
         # For now, just return success
-        
+
         return {"message": "Preferences updated successfully"}, 200

@@ -35,12 +35,19 @@ class FakePaystack:
 
     def initialize(self, **kwargs):
         self.initialized.append(kwargs)
-        return {"authorization_url": f"https://checkout.paystack.test/{kwargs['reference']}",
-                "access_code": "ac_test", "reference": kwargs["reference"]}
+        return {
+            "authorization_url": f"https://checkout.paystack.test/{kwargs['reference']}",
+            "access_code": "ac_test",
+            "reference": kwargs["reference"],
+        }
 
     def verify(self, reference):
-        data = {"reference": reference, "currency": "GHS", "channel": "mobile_money",
-                "gateway_response": "Approved"}
+        data = {
+            "reference": reference,
+            "currency": "GHS",
+            "channel": "mobile_money",
+            "gateway_response": "Approved",
+        }
         data.update(self.verify_result)
         return data
 
@@ -53,9 +60,14 @@ class FakePaystack:
 
 def make_user(role, phone, **extra):
     if role == "admin":
-        extra.setdefault("admin_level", "management")   # services/access.py
-    user = User(phone=phone, role=role, status="approved",
-                password=guard.hash_password("Secret123!"), **eligible_customer(extra, phone))
+        extra.setdefault("admin_level", "management")  # services/access.py
+    user = User(
+        phone=phone,
+        role=role,
+        status="approved",
+        password=guard.hash_password("Secret123!"),
+        **eligible_customer(extra, phone),
+    )
     db.session.add(user)
     db.session.commit()
     return user
@@ -82,12 +94,23 @@ def env(monkeypatch):
         admin = make_user("admin", "0200000301")
         merchant = make_user("merchant", "0200000302")
         customer = make_user("customer", "0200000303", kyc_status="verified")
-        product = Product(product_id="PRD0301", merchant_id=merchant.id, name="Phone",
-                          price=4000, stock_quantity=3, status="active")
+        product = Product(
+            product_id="PRD0301",
+            merchant_id=merchant.id,
+            name="Phone",
+            price=4000,
+            stock_quantity=3,
+            status="active",
+        )
         db.session.add(product)
         db.session.commit()
-        yield {"client": client, "fake": fake, "product": product,
-               "customer": token(client, customer.phone), "admin": token(client, admin.phone)}
+        yield {
+            "client": client,
+            "fake": fake,
+            "product": product,
+            "customer": token(client, customer.phone),
+            "admin": token(client, admin.phone),
+        }
         db.session.remove()
         db.drop_all()
 
@@ -99,15 +122,25 @@ def signed(body: dict):
 
 
 def checkout(env):
-    res = env["client"].post("/customer/purchase", headers=env["customer"], json={"accept_terms": True, 
-        "product_id": env["product"].id, "number_of_installments": 4,
-        "delivery_address": "Osu, Accra", "down_payment_amount": 1})
+    res = env["client"].post(
+        "/customer/purchase",
+        headers=env["customer"],
+        json={
+            "accept_terms": True,
+            "product_id": env["product"].id,
+            "number_of_installments": 4,
+            "delivery_address": "Osu, Accra",
+            "down_payment_amount": 1,
+        },
+    )
     assert res.status_code == 201, res.get_json()
     return res.get_json()
 
 
 def verify(env, reference):
-    return env["client"].get(f"/customer/payments/paystack/verify/{reference}", headers=env["customer"])
+    return env["client"].get(
+        f"/customer/payments/paystack/verify/{reference}", headers=env["customer"]
+    )
 
 
 def paid_checkout(env):
@@ -118,19 +151,24 @@ def paid_checkout(env):
 
 
 def approve(env, order_pk):
-    return env["client"].put(f"/admin/orders/{order_pk}/approve", headers=env["admin"], json={})
+    return env["client"].put(
+        f"/admin/orders/{order_pk}/approve", headers=env["admin"], json={}
+    )
 
 
 # ---------------- checkout: down payment ----------------
 
+
 def test_checkout_starts_paystack_for_payment_1(env):
     body = checkout(env)
     assert body["status"] == "awaiting_payment"
-    assert body["amount"] == 1650.0                          # server amount, not the client's 1
+    assert body["amount"] == 1650.0  # server amount, not the client's 1
     assert body["authorization_url"].endswith(body["reference"])
     assert env["fake"].initialized[-1]["amount_pesewas"] == 165000
     intent = PaymentIntent.query.filter_by(reference=body["reference"]).one()
-    assert intent.purpose == PaymentIntent.DOWN_PAYMENT and intent.order_id == body["id"]
+    assert (
+        intent.purpose == PaymentIntent.DOWN_PAYMENT and intent.order_id == body["id"]
+    )
 
 
 def test_admin_cannot_approve_before_down_payment(env):
@@ -158,17 +196,34 @@ def test_paid_checkout_goes_to_approval_and_plan_starts_paid(env):
 def test_signed_webhook_confirms_down_payment_once(env):
     body = checkout(env)
     env["fake"].verify_result = {"status": "success", "amount": 165000}
-    raw, headers = signed({"event": "charge.success", "data": {"reference": body["reference"]}})
-    assert env["client"].post("/webhooks/paystack", data=raw, headers=headers).get_json()["status"] == "applied"
-    assert env["client"].post("/webhooks/paystack", data=raw, headers=headers).get_json()["status"] == "already_applied"
+    raw, headers = signed(
+        {"event": "charge.success", "data": {"reference": body["reference"]}}
+    )
+    assert (
+        env["client"]
+        .post("/webhooks/paystack", data=raw, headers=headers)
+        .get_json()["status"]
+        == "applied"
+    )
+    assert (
+        env["client"]
+        .post("/webhooks/paystack", data=raw, headers=headers)
+        .get_json()["status"]
+        == "already_applied"
+    )
     assert PurchaseOrder.query.get(body["id"]).status == "pending"
 
 
 def test_webhook_rejects_bad_signature(env):
     body = checkout(env)
-    raw = json.dumps({"event": "charge.success", "data": {"reference": body["reference"]}}).encode()
-    res = env["client"].post("/webhooks/paystack", data=raw,
-                             headers={"x-paystack-signature": "forged", "Content-Type": "application/json"})
+    raw = json.dumps(
+        {"event": "charge.success", "data": {"reference": body["reference"]}}
+    ).encode()
+    res = env["client"].post(
+        "/webhooks/paystack",
+        data=raw,
+        headers={"x-paystack-signature": "forged", "Content-Type": "application/json"},
+    )
     assert res.status_code == 401
     assert PurchaseOrder.query.get(body["id"]).status == "awaiting_payment"
 
@@ -185,8 +240,12 @@ def test_failed_down_payment_can_be_retried(env):
     body = checkout(env)
     env["fake"].verify_result = {"status": "failed", "amount": 165000}
     assert verify(env, body["reference"]).get_json()["status"] == PaymentIntent.FAILED
-    retry = env["client"].post(f"/customer/orders/{body['id']}/pay", headers=env["customer"])
-    assert retry.status_code == 201 and retry.get_json()["reference"] != body["reference"]
+    retry = env["client"].post(
+        f"/customer/orders/{body['id']}/pay", headers=env["customer"]
+    )
+    assert (
+        retry.status_code == 201 and retry.get_json()["reference"] != body["reference"]
+    )
     env["fake"].verify_result = {"status": "success", "amount": 165000}
     assert verify(env, retry.get_json()["reference"]).get_json()["outcome"] == "applied"
     assert PurchaseOrder.query.get(body["id"]).status == "pending"
@@ -194,7 +253,11 @@ def test_failed_down_payment_can_be_retried(env):
 
 def test_second_down_payment_is_flagged_not_double_counted(env):
     body = checkout(env)
-    second = env["client"].post(f"/customer/orders/{body['id']}/pay", headers=env["customer"]).get_json()
+    second = (
+        env["client"]
+        .post(f"/customer/orders/{body['id']}/pay", headers=env["customer"])
+        .get_json()
+    )
     env["fake"].verify_result = {"status": "success", "amount": 165000}
     assert verify(env, body["reference"]).get_json()["outcome"] == "applied"
     assert verify(env, second["reference"]).get_json()["outcome"] == "duplicate_payment"
@@ -204,8 +267,11 @@ def test_second_down_payment_is_flagged_not_double_counted(env):
 
 def test_rejecting_a_paid_order_refunds_the_down_payment(env):
     body = paid_checkout(env)
-    res = env["client"].put(f"/admin/orders/{body['id']}/reject", headers=env["admin"],
-                            json={"reason": "Customer outside service area"})
+    res = env["client"].put(
+        f"/admin/orders/{body['id']}/reject",
+        headers=env["admin"],
+        json={"reason": "Customer outside service area"},
+    )
     assert res.status_code == 200 and res.get_json()["refund_status"] == "refunded"
     assert env["fake"].refunds == [body["reference"]]
     order = PurchaseOrder.query.get(body["id"])
@@ -215,15 +281,22 @@ def test_rejecting_a_paid_order_refunds_the_down_payment(env):
 def test_failed_refund_is_flagged_for_manual_action(env):
     body = paid_checkout(env)
     env["fake"].refund_error = "Refund not possible"
-    res = env["client"].put(f"/admin/orders/{body['id']}/reject", headers=env["admin"],
-                            json={"reason": "Out of stock at merchant"})
+    res = env["client"].put(
+        f"/admin/orders/{body['id']}/reject",
+        headers=env["admin"],
+        json={"reason": "Out of stock at merchant"},
+    )
     assert res.get_json()["refund_status"] == "refund_failed"
     assert "manually" in res.get_json()["message"]
 
 
 def test_payment_after_rejection_is_marked_for_refund(env):
     body = checkout(env)
-    env["client"].put(f"/admin/orders/{body['id']}/reject", headers=env["admin"], json={"reason": "Duplicate order"})
+    env["client"].put(
+        f"/admin/orders/{body['id']}/reject",
+        headers=env["admin"],
+        json={"reason": "Duplicate order"},
+    )
     env["fake"].verify_result = {"status": "success", "amount": 165000}
     assert verify(env, body["reference"]).get_json()["outcome"] == "refund_required"
     assert PurchaseOrder.query.get(body["id"]).refund_status == "refund_required"
@@ -231,12 +304,16 @@ def test_payment_after_rejection_is_marked_for_refund(env):
 
 # ---------------- instalments after approval ----------------
 
+
 def test_instalment_paid_through_paystack(env):
     body = paid_checkout(env)
     approve(env, body["id"])
     plan = InstalmentPlan.query.one()
-    res = env["client"].post("/customer/payments/paystack/initialize", headers=env["customer"],
-                             json={"plan_id": plan.id, "amount": 1})
+    res = env["client"].post(
+        "/customer/payments/paystack/initialize",
+        headers=env["customer"],
+        json={"plan_id": plan.id, "amount": 1},
+    )
     assert res.status_code == 201
     start = res.get_json()
     assert start["installment_number"] == 2 and start["amount"] == 800.0
@@ -248,14 +325,19 @@ def test_instalment_paid_through_paystack(env):
 def test_customer_cannot_verify_someone_elses_payment(env):
     body = checkout(env)
     other = make_user("customer", "0209999999")
-    res = env["client"].get(f"/customer/payments/paystack/verify/{body['reference']}",
-                            headers=token(env["client"], other.phone))
+    res = env["client"].get(
+        f"/customer/payments/paystack/verify/{body['reference']}",
+        headers=token(env["client"], other.phone),
+    )
     assert res.status_code == 404
 
 
 def test_without_paystack_orders_go_straight_to_approval(env):
     from flask import current_app
+
     current_app.config["PAYSTACK_SECRET_KEY"] = None
     body = checkout(env)
     assert body["status"] == "pending" and "authorization_url" not in body
-    assert env["client"].get("/customer/payments/config", headers=env["customer"]).get_json() == {"paystack_enabled": False}
+    assert env["client"].get(
+        "/customer/payments/config", headers=env["customer"]
+    ).get_json() == {"paystack_enabled": False}

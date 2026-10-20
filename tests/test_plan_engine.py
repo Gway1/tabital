@@ -4,7 +4,11 @@ from decimal import Decimal
 import pytest
 
 from app.services.plan_engine import (
-    PlanError, add_months, build_plan, down_payment_rate_for, quote,
+    PlanError,
+    add_months,
+    build_plan,
+    down_payment_rate_for,
+    quote,
 )
 
 D = Decimal
@@ -31,7 +35,12 @@ def test_reference_example_pay_in_4():
     assert plan["total_payable"] == D("4000.00")
     assert plan["merchant_fee"] == D("400.00")
     assert plan["merchant_settlement"] == D("3600.00")
-    assert [p["amount"] for p in plan["schedule"]] == [D("1600.00"), D("800.00"), D("800.00"), D("800.00")]
+    assert [p["amount"] for p in plan["schedule"]] == [
+        D("1600.00"),
+        D("800.00"),
+        D("800.00"),
+        D("800.00"),
+    ]
 
 
 def test_delivery_fee_is_paid_with_down_payment_and_not_financed():
@@ -82,7 +91,10 @@ def test_due_dates_same_calendar_day_clamped_to_month_end():
     assert add_months(datetime(2026, 11, 30), 2) == datetime(2027, 1, 30)
     plan = build_plan(D("4000"), 4, D("0.40"), start=datetime(2026, 1, 31))
     assert [p["due_date"].date().isoformat() for p in plan["schedule"]] == [
-        "2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30",
+        "2026-01-31",
+        "2026-02-28",
+        "2026-03-31",
+        "2026-04-30",
     ]
 
 
@@ -92,7 +104,12 @@ def test_unsupported_plan_rejected():
 
 
 def test_rates_are_read_from_settings():
-    plan = quote("4000", 1, 4, settings({"down_payment_percentage": 25, "merchant_fee_percentage": 8}))
+    plan = quote(
+        "4000",
+        1,
+        4,
+        settings({"down_payment_percentage": 25, "merchant_fee_percentage": 8}),
+    )
     assert plan["down_payment"] == D("1000.00")
     assert plan["merchant_fee"] == D("320.00")
 
