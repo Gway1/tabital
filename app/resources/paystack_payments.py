@@ -46,6 +46,23 @@ def _new_reference(plan, payment):
     return f"TBP-{plan.id}-{payment.installment_number}-{uuid.uuid4().hex[:12]}"
 
 
+def _merchant_return(order):
+    """Merchant name and success URL when the order came from a gateway checkout."""
+    if not order or not order.checkout_session_id:
+        return None
+    from ..models.gateway import CheckoutSession
+
+    session = CheckoutSession.query.get(order.checkout_session_id)
+    if not session:
+        return None
+    return {
+        "merchant_name": order.merchant.business_name or order.merchant.full_name,
+        "url": session.success_url,  # None for a POS checkout: there is no website to return to
+        "reference": session.merchant_reference,
+        "medium": session.medium or "ecommerce",
+    }
+
+
 def _intent_view(intent, outcome=None):
     return {
         "reference": intent.reference,
@@ -58,6 +75,8 @@ def _intent_view(intent, outcome=None):
         "plan_id": intent.plan_id,
         "order_id": intent.order.order_id if intent.order else None,
         "order_status": intent.order.status if intent.order else None,
+        # Gateway orders: where to send the customer back to the merchant's website
+        "merchant_return": _merchant_return(intent.order),
         "installment_number": intent.payment.installment_number
         if intent.payment
         else 1,

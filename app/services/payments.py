@@ -298,6 +298,10 @@ def _apply_down_payment(intent):
     order.down_payment_paid_at = datetime.utcnow()
     if order.status == "awaiting_payment":
         order.status = "pending"
+        from . import webhooks
+
+        webhooks.queue_order_event(order, "order.paid")  # down payment collected: the till can accept
+        webhooks.queue_order_event(order, "order.pending")
         return "applied"
     if order.status in ("rejected", "cancelled"):
         # Money arrived after the order was closed: it must go back to the customer

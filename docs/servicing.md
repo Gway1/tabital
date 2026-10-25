@@ -47,6 +47,10 @@ Plans paused by an open dispute are skipped by all of the above.
 
 Messages use mNotify's Quick SMS API (`POST https://api.mnotify.com/api/sms/quick`). The campaign `_id` is stored as `provider_message_id` in `message_outbox`. A failed send is recorded with its error and retried up to 3 times. Check sent and failed messages at `GET /admin/messages`.
 
+### Alternative: Hubtel
+
+Set `SMS_PROVIDER=hubtel` with `HUBTEL_CLIENT_ID`, `HUBTEL_CLIENT_SECRET` and `HUBTEL_SENDER_ID` (11 characters or fewer, approved in Hubtel; default `TabitalPay`). `HUBTEL_BASE_URL` defaults to `https://smsc.hubtel.com/v1`. Messages go to `POST {base}/messages/send` with Basic auth, and Hubtel's `messageId` is stored as `provider_message_id`. The same provider sends the `sms` and `whatsapp` reminder channels; there is no separate Hubtel WhatsApp integration.
+
 Any other provider can be added by implementing `send(to, body)` in `app/services/sms.py` and registering it in `PROVIDERS`.
 
 ## Autopay

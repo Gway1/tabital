@@ -81,6 +81,20 @@ from .services.auth_service import (
 
 
 # Auth Resources
+from .resources.gateway import (
+    MerchantGatewayKeysResource,
+    MerchantGatewayKeyResource,
+    MerchantGatewaySettingsResource,
+    MerchantGatewaySessionsResource,
+    MerchantGatewayWebhooksResource,
+    GatewaySessionsResource,
+    GatewaySessionResource,
+    GatewaySessionCancelResource,
+    GatewaySessionResendResource,
+    GatewayOrderResource,
+    CustomerCheckoutSessionResource,
+    CustomerCheckoutPurchaseResource,
+)
 from .resources.auth import CheckUserExistsResource, RegisterResource, LoginResource
 
 # Protected Resources
@@ -162,6 +176,7 @@ from .resources.admin_merchants import (
     AdminGetMerchantsResource,
     AdminGetMerchantDetailResource,
     AdminUpdateMerchantStatusResource,
+    AdminMerchantGatewayResource,
     AdminUpdateMerchantCommissionResource,
     AdminAdjustMerchantReserveResource,
 )
@@ -273,7 +288,11 @@ from .resources.system_settings import (
 
 from .resources.product import MerchantProductsResource, MerchantProductDetailResource
 
-from .resources.admin_orders import AdminGetOrdersResource, AdminRejectOrderResource
+from .resources.admin_orders import (
+    AdminExportOrdersResource,
+    AdminGetOrdersResource,
+    AdminRejectOrderResource,
+)
 from .resources.merchant_orders import (
     MerchantGetOrdersResource,
     MerchantUpdateDeliveryStatusResource,
@@ -789,6 +808,31 @@ def register_routes(app):
     api.add_resource(MerchantExportCustomersResource, "/merchant/customers/export")
 
     # ============================================
+    # PAYMENT GATEWAY ROUTES (hosted checkout for merchants' own websites)
+    # ============================================
+    api.add_resource(MerchantGatewayKeysResource, "/merchant/gateway/keys")
+    api.add_resource(MerchantGatewayKeyResource, "/merchant/gateway/keys/<int:key_id>")
+    api.add_resource(MerchantGatewaySettingsResource, "/merchant/gateway/settings")
+    api.add_resource(MerchantGatewaySessionsResource, "/merchant/gateway/sessions")
+    api.add_resource(MerchantGatewayWebhooksResource, "/merchant/gateway/webhooks")
+    api.add_resource(GatewaySessionsResource, "/gateway/sessions")
+    api.add_resource(GatewaySessionResource, "/gateway/sessions/<int:session_id>")
+    api.add_resource(
+        GatewaySessionCancelResource, "/gateway/sessions/<int:session_id>/cancel"
+    )
+    api.add_resource(
+        GatewaySessionResendResource, "/gateway/sessions/<int:session_id>/resend"
+    )
+    api.add_resource(GatewayOrderResource, "/gateway/orders/<string:ref>")
+    api.add_resource(
+        CustomerCheckoutSessionResource, "/customer/gateway/sessions/<string:token>"
+    )
+    api.add_resource(
+        CustomerCheckoutPurchaseResource,
+        "/customer/gateway/sessions/<string:token>/purchase",
+    )
+
+    # ============================================
     # MERCHANT SETTLEMENT ROUTES
     # ============================================
     api.add_resource(MerchantGetSettlementsResource, "/merchant/settlements")
@@ -976,6 +1020,7 @@ def register_routes(app):
     # ADMIN ORDER ROUTES
     # ============================================
     api.add_resource(AdminGetOrdersResource, "/admin/orders")
+    api.add_resource(AdminExportOrdersResource, "/admin/orders/export")
     api.add_resource(AdminApproveOrderResource, "/admin/orders/<int:order_id>/approve")
     api.add_resource(AdminRejectOrderResource, "/admin/orders/<int:order_id>/reject")
 
@@ -1170,6 +1215,10 @@ def register_routes(app):
     # Update merchant status
     api.add_resource(
         AdminUpdateMerchantStatusResource, "/admin/merchants/<int:merchant_id>/status"
+    )
+
+    api.add_resource(
+        AdminMerchantGatewayResource, "/admin/merchants/<int:merchant_id>/gateway"
     )
 
     # Update merchant commission rate

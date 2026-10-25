@@ -1,3 +1,5 @@
+import calendar
+import hashlib
 import hmac
 import secrets
 from datetime import datetime, timedelta
@@ -65,6 +67,73 @@ OTP_MAX_ATTEMPTS = 5
 RESET_TOKEN_TTL = timedelta(minutes=30)
 
 
+def _digest(value):
+    """Keyed hash of a reset code or token. Only this is stored, so a copy of the database (or a
+    backup) can't be used to take over an account that has a reset in progress. Keyed because a
+    6-digit code has too few values for a plain hash to hide."""
+    return hmac.new(
+        current_app.config["SECRET_KEY"].encode(),
+        str(value).encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _users_for_email(email):
+    """The one account an email belongs to, or None (no match, or more than one: `email` isn't unique)."""
+    users = User.query.filter(
+        or_(User.business_email == email, db.func.lower(User.email) == email)
+    ).all()
+    exact = [u for u in users if u.business_email == email]
+    if len(exact) == 1:
+        return exact[0]
+    if len(users) == 1:
+        return users[0]
+    if len(users) > 1:
+        current_app.logger.warning("Password reset: several accounts share one email")
+    return None
+
+
+def _user_for_phone(phone):
+    """The one account a phone number belongs to, whichever way it was written (024…, +23324…, 23324…)."""
+    from . import sms
+
+    variants = {phone}
+    local, e164 = sms.to_local(phone), sms.to_e164(phone)
+    if local:
+        variants.add(local)
+    if e164:
+        variants.update({e164, e164[1:]})
+    users = User.query.filter(User.phone.in_(variants)).all()
+    return users[0] if len(users) == 1 else None
+
+
+def _reset_target(data):
+    """(channel, identifier, user) for a reset request that names an email or a phone number.
+    user is None when nothing, or more than one account, matches. channel is None if neither was given."""
+    email = (data.get("email") or "").strip().lower()
+    if email:
+        return "email", email, _users_for_email(email)
+    phone = (data.get("phone") or "").strip()
+    if phone:
+        from . import sms
+
+        return "sms", sms.to_local(phone) or phone, _user_for_phone(phone)
+    return None, "", None
+
+
+def password_changed(user):
+    """Signs out every session started before now (checked in app.register_access_control)."""
+    user.password_changed_at = datetime.utcnow()
+
+
+def session_predates_password_change(user, issued_at):
+    """True if a token issued at `issued_at` (epoch seconds, the JWT iat) is older than the last password change."""
+    changed = getattr(user, "password_changed_at", None)
+    if not changed or issued_at is None:
+        return False
+    return int(issued_at) < calendar.timegm(changed.utctimetuple())
+
+
 class RegistrationError(ValueError):
     def __init__(self, field, message, status=400):
         super().__init__(message)
@@ -89,6 +158,20 @@ def register_user(data):
     fields = {k: v for k, v in data.items() if k in SIGNUP_FIELDS[role]}
     if fields.get("business_email"):
         fields["business_email"] = fields["business_email"].strip().lower()
+
+    if role == "merchant" and (fields.get("shop_url") or "").strip():
+        # The storefront URL is the gateway's allowed redirect domain, so it must be a real address
+        from . import gateway
+
+        url = fields["shop_url"].strip()
+        if "://" not in url:
+            url = "https://" + url
+        try:
+            fields["shop_url"] = gateway.validate_storefront_url(url)
+        except gateway.GatewayError as e:
+            raise RegistrationError("shop_url", e.message)
+    elif role == "merchant":
+        fields.pop("shop_url", None)
 
     if role == "customer":
         # Underwriting details (Phase 3); the salary is verified later by Tabital, never at sign-up
@@ -227,24 +310,28 @@ def login_user(identifier, password):
 def _generic_reset_response():
     # Same response whether or not the account exists, so the endpoint can't be used to find accounts
     return {
-        "message": "If your account exists, you will receive a password reset email"
+        "message": "If your account exists, you will receive a password reset code"
     }, 200
 
 
 class ForgotPasswordResource(Resource):
     @api_doc(
-        "Email a password-reset code",
-        description="Answers the same whether or not the account exists, so it can't be used to find accounts.",
-        body=obj({"email": STR}, required=["email"]),
-        responses={200: ("Sent, if the account exists", MESSAGE), 400: "Email missing"},
+        "Email or text a password-reset code",
+        description="Send the account's email or phone number. Answers the same whether or not the account exists, so it can't be used to find accounts.",
+        body=obj({"email": STR, "phone": STR}),
+        responses={
+            200: ("Sent, if the account exists", MESSAGE),
+            400: "Email and phone both missing",
+        },
     )
     def post(self):
-        """Request password reset - sends OTP to user's email"""
+        """Request password reset - sends OTP to the user's email or phone"""
         data = request.get_json() or {}
-        email = (data.get("email") or "").strip().lower()
+        channel, identifier, user = _reset_target(data)
 
-        if not email:
-            return {"error": "Email address is required"}, 400
+        if not channel:
+            return {"error": "Email address or phone number is required"}, 400
+        email = identifier if channel == "email" else ""
 
         # At most RESET_REQUESTS_PER_IP_PER_HOUR from one address (same answer either way), so this
         # can't be used to flood someone's inbox
@@ -253,13 +340,12 @@ class ForgotPasswordResource(Resource):
 
         ip = attempts.client_ip()
         hour_ago = datetime.utcnow() - timedelta(hours=1)
-        attempts.begin(LoginAttempt.RESET, f"ip:{ip}", email, ip)
+        attempts.begin(LoginAttempt.RESET, f"ip:{ip}", identifier, ip)
         if ip and attempts.failures(
             LoginAttempt.RESET, f"ip:{ip}", hour_ago
         ) > current_app.config.get("RESET_REQUESTS_PER_IP_PER_HOUR", 10):
             return _generic_reset_response()
 
-        user = User.query.filter_by(business_email=email).first()
         if not user:
             return _generic_reset_response()
 
@@ -274,7 +360,7 @@ class ForgotPasswordResource(Resource):
         # that bounds guessing from many addresses (the owner is emailed every code, so it's visible)
         issued_today = LoginAttempt.query.filter(
             LoginAttempt.kind == LoginAttempt.RESET,
-            LoginAttempt.subject == attempts.subject_for(user, email),
+            LoginAttempt.subject == attempts.subject_for(user, identifier),
             LoginAttempt.created_at >= now - timedelta(days=1),
         ).count()
         # The owner asking from an address they've signed in from before still gets a code, so someone
@@ -283,7 +369,7 @@ class ForgotPasswordResource(Resource):
             bool(ip)
             and LoginAttempt.query.filter(
                 LoginAttempt.kind == LoginAttempt.LOGIN,
-                LoginAttempt.subject == attempts.subject_for(user, email),
+                LoginAttempt.subject == attempts.subject_for(user, identifier),
                 LoginAttempt.ip == ip,
                 LoginAttempt.success.is_(True),
                 LoginAttempt.created_at >= now - timedelta(days=30),
@@ -297,14 +383,18 @@ class ForgotPasswordResource(Resource):
         ):
             return _generic_reset_response()
         attempts.begin(
-            LoginAttempt.RESET, attempts.subject_for(user, email), email, ip, now
+            LoginAttempt.RESET, attempts.subject_for(user, identifier), identifier, ip, now
         )
 
         otp = f"{secrets.randbelow(1_000_000):06d}"
-        user.reset_otp = otp
+        user.reset_otp = _digest(otp)
         user.reset_otp_expiry = now + OTP_TTL
         user.reset_otp_attempts = 0
         db.session.commit()
+
+        if channel == "sms":
+            _send_reset_sms(user, otp)
+            return _generic_reset_response()
 
         try:
             msg = Message(
@@ -397,6 +487,34 @@ class ForgotPasswordResource(Resource):
         return _generic_reset_response()
 
 
+def _send_reset_sms(user, otp):
+    """Text the code, off the request, so a real account answers as fast as an unknown one."""
+    import threading
+
+    from . import sms
+
+    app = current_app._get_current_object()
+    to = user.phone
+    body = (
+        f"Your Tabital Pay reset code is {otp}. It expires in "
+        f"{int(OTP_TTL.total_seconds() // 60)} minutes. Never share it."
+    )
+
+    def run():
+        with app.app_context():
+            try:
+                result = sms.provider().send(to, body)
+                if not result.ok:
+                    app.logger.error("Reset SMS not sent: %s", result.error)
+            except Exception:  # noqa: BLE001
+                app.logger.exception("Failed to send password reset SMS")
+
+    if app.config.get("TESTING"):
+        run()
+        return
+    threading.Thread(target=run, daemon=True).start()
+
+
 def _send_in_background(msg):
     """Send without making the request wait, so a real account answers as fast as an unknown one."""
     import threading
@@ -418,12 +536,12 @@ def _send_in_background(msg):
 
 class VerifyResetOTPResource(Resource):
     @api_doc(
-        "Check the emailed code and get a reset token",
-        description="One answer (401) for every failure, so it can't be used to find accounts.",
-        body=obj({"email": STR, "otp": STR}, required=["email", "otp"]),
+        "Check the emailed or texted code and get a reset token",
+        description="Send the same email or phone the code was requested for. One answer (401) for every failure, so it can't be used to find accounts.",
+        body=obj({"email": STR, "phone": STR, "otp": STR}, required=["otp"]),
         responses={
             200: ("Code accepted", obj({"message": STR, "reset_token": STR})),
-            400: "Email or code missing",
+            400: "Email or phone, or the code, missing",
             401: "Code is wrong or has expired",
             429: "Too many attempts",
         },
@@ -431,11 +549,11 @@ class VerifyResetOTPResource(Resource):
     def post(self):
         """Verify OTP and return reset token"""
         data = request.get_json() or {}
-        email = (data.get("email") or "").strip().lower()
+        channel, identifier, user = _reset_target(data)
         otp = str(data.get("otp") or "").strip()
 
-        if not email or not otp:
-            return {"error": "Email and OTP are required"}, 400
+        if not channel or not otp:
+            return {"error": "Email or phone, and OTP, are required"}, 400
 
         # One answer for every failure (unknown email, no code, wrong or expired code), so this can't
         # be used to find accounts. Attempts are recorded first, then counted: at most
@@ -453,7 +571,6 @@ class VerifyResetOTPResource(Resource):
         cfg = current_app.config
         now = datetime.utcnow()
         ip = attempts.client_ip()
-        user = User.query.filter_by(business_email=email).first()
         active = bool(
             user
             and user.reset_otp
@@ -462,8 +579,8 @@ class VerifyResetOTPResource(Resource):
         )
         # Guesses against a real, issued code count on the account. Anything else (unknown email, no
         # code) counts on the caller's address, so a stranger can't use up the owner's daily quota.
-        subject = attempts.subject_for(user, email) if active else f"ip:{ip}"
-        attempt = attempts.begin(LoginAttempt.OTP, subject, email, ip, now)
+        subject = attempts.subject_for(user, identifier) if active else f"ip:{ip}"
+        attempt = attempts.begin(LoginAttempt.OTP, subject, identifier, ip, now)
 
         day = now - timedelta(days=1)
         # Daily cap per (account, address): a stranger using up their own allowance doesn't lock the
@@ -486,19 +603,20 @@ class VerifyResetOTPResource(Resource):
             user.reset_otp = None  # this code is used up
             db.session.commit()
             return bad
-        if not hmac.compare_digest(user.reset_otp, otp):
+        if not hmac.compare_digest(user.reset_otp, _digest(otp)):
             return bad
 
         attempts.succeed(attempt)
+        reset_token = secrets.token_urlsafe(32)
         user.reset_otp = None
         user.reset_otp_attempts = 0
-        user.reset_token = secrets.token_urlsafe(32)
+        user.reset_token = _digest(reset_token)
         user.reset_token_expiry = datetime.utcnow() + RESET_TOKEN_TTL
         db.session.commit()
 
         return {
             "message": "OTP verified successfully",
-            "reset_token": user.reset_token,
+            "reset_token": reset_token,
         }, 200
 
 
@@ -530,7 +648,7 @@ class ResetPasswordResource(Resource):
                 "error": f"Password must be at least {MIN_PASSWORD_LENGTH} characters"
             }, 400
 
-        user = User.query.filter_by(reset_token=reset_token).first()
+        user = User.query.filter_by(reset_token=_digest(reset_token)).first()
         if not user:
             return {"error": "Invalid or expired reset token"}, 404
 
@@ -538,6 +656,7 @@ class ResetPasswordResource(Resource):
             return {"error": "Reset token has expired. Please request a new one."}, 401
 
         user.password = guard.hash_password(new_password)
+        password_changed(user)
         user.reset_otp = None
         user.reset_otp_expiry = None
         user.reset_otp_attempts = 0
@@ -595,5 +714,6 @@ def change_password(user, current_password, new_password):
             "error": f"New password must be at least {MIN_PASSWORD_LENGTH} characters"
         }, 400
     user.password = guard.hash_password(new_password)
+    password_changed(user)
     db.session.commit()
     return {"message": "Password updated successfully"}, 200

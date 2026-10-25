@@ -53,6 +53,26 @@ def base_url():
     ).rstrip("/")
 
 
+def is_sandbox() -> bool:
+    return "testapi" in base_url()
+
+
+def config_warnings() -> list:
+    """Problems with a configured Smile ID that would only show up with real customers."""
+    if not is_configured():
+        return []
+    problems = []
+    if is_sandbox():
+        problems.append(
+            "SMILEID_BASE_URL is the Smile ID sandbox: no real identity is being checked"
+        )
+    if not current_app.config.get("SMILEID_CALLBACK_URL"):
+        problems.append(
+            "SMILEID_CALLBACK_URL is not set: Smile ID has nowhere to post results"
+        )
+    return problems
+
+
 def mint_token(*, user_ref, product, payload, partner_params=None):
     """A 15-minute token the browser uses to submit one job. Returns the token string.
 

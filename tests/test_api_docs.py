@@ -57,10 +57,15 @@ def test_documented_endpoints_carry_body_and_responses(docs_app):
         "role"
     ]["enum"]
     assert "409" in signup["responses"] and "201" in signup["responses"]
-    for path in ("/forgot-password", "/api/verify-otp", "/reset-password"):
+    for path in ("/api/verify-otp", "/reset-password"):
         assert paths[path]["post"]["requestBody"]["content"]["application/json"][
             "schema"
         ]["required"]
+    # Email or phone: neither is required on its own
+    forgot = paths["/forgot-password"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert {"email", "phone"} <= set(forgot["properties"])
 
 
 def _spec(app):

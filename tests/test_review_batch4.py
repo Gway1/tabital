@@ -2,6 +2,7 @@
 refused sign-ins don't extend a lock, merchant fee tier order."""
 from datetime import datetime, timedelta
 
+from app.services.auth_service import _digest
 from app.extensions import db
 from app.models.instalment_payment import InstalmentPayment
 from app.models.login_attempt import LoginAttempt
@@ -141,7 +142,7 @@ def test_reset_code_guesses_without_a_code_dont_use_up_the_owners_quota(
             json={"email": "esi@example.com", "otp": "000000"},
             headers={"X-Forwarded-For": f"10.7.7.{i % 3}"},
         )
-    user.reset_otp, user.reset_otp_expiry = "246810", datetime.utcnow() + timedelta(
+    user.reset_otp, user.reset_otp_expiry = _digest("246810"), datetime.utcnow() + timedelta(
         minutes=10
     )
     db.session.commit()

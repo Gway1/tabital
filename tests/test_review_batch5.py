@@ -2,6 +2,7 @@
 restrictions; waived fees never cure; receipts can't be reused; list sorting and statuses; reset lockout."""
 from datetime import datetime, timedelta
 
+from app.services.auth_service import _digest
 from app.extensions import db
 from app.models.instalment import InstalmentPlan
 from app.models.instalment_payment import InstalmentPayment
@@ -168,7 +169,7 @@ def test_a_stranger_cant_use_up_the_owners_reset_allowance(app_ctx):  # noqa: F8
     client = app_ctx.test_client()
     user = make_user("customer", "0200000708", business_email="ama.k@example.com")
     for _ in range(3):  # attacker: codes issued, wrong guesses from one IP
-        user.reset_otp, user.reset_otp_expiry = "135790", datetime.utcnow() + timedelta(
+        user.reset_otp, user.reset_otp_expiry = _digest("135790"), datetime.utcnow() + timedelta(
             minutes=10
         )
         db.session.commit()
@@ -178,7 +179,7 @@ def test_a_stranger_cant_use_up_the_owners_reset_allowance(app_ctx):  # noqa: F8
                 json={"email": "ama.k@example.com", "otp": "000000"},
                 headers={"X-Forwarded-For": "10.66.0.1"},
             )
-    user.reset_otp, user.reset_otp_expiry = "135790", datetime.utcnow() + timedelta(
+    user.reset_otp, user.reset_otp_expiry = _digest("135790"), datetime.utcnow() + timedelta(
         minutes=10
     )
     db.session.commit()

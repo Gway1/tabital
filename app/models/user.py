@@ -38,6 +38,10 @@ class User(db.Model):
     )  # not unique: two customers may share a referee
     ref_relationship = db.Column(db.String(100))
     shop_url = db.Column(db.String(200))
+    # Payment gateway (hosted checkout for the merchant's own website)
+    gateway_enabled = db.Column(db.Boolean, default=True)
+    webhook_url = db.Column(db.String(500))
+    webhook_secret = db.Column(db.String(80))
 
     # Merchant Fields
     business_name = db.Column(db.String(100))
@@ -119,11 +123,13 @@ class User(db.Model):
 
     created_at = db.Column(db.DateTime, server_default=db.func.now())
     updated_at = db.Column(db.DateTime, onupdate=db.func.now())
-    reset_otp = db.Column(db.String(10))
+    reset_otp = db.Column(db.String(64))  # keyed hash, never the code itself
     reset_otp_expiry = db.Column(db.DateTime)
     reset_otp_attempts = db.Column(db.Integer, default=0)
     reset_token = db.Column(db.String(100))
     reset_token_expiry = db.Column(db.DateTime)
+    # Sessions started before this are signed out (services/auth_service.py: password_changed)
+    password_changed_at = db.Column(db.DateTime)
 
     # Flask-Praetorian Methods
     @property

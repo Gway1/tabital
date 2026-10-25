@@ -791,7 +791,7 @@ class GetCurrentUserResource(Resource):
             "verified": safe_bool(user.verified),
             "kyc_status": safe_str(user.kyc_status),
             "verification_level": safe_str(user.verification_level),
-            "commission_rate": merchant_fees.describe(user)["fee_percentage"]
+            "commission_rate": (merchant_fees.describe(user) or {}).get("fee_percentage")
             if user.role == "merchant"
             else None,
             "pending_payout": safe_float(user.pending_payout),
@@ -880,6 +880,9 @@ class AdminApproveOrderResource(Resource):
         # Order status is committed together with the plan, payments and transaction below
         order.status = "approved"
         order.approved_at = datetime.now()
+        from ..services import webhooks
+
+        webhooks.queue_order_event(order, "order.approved")
         order.admin_notes = data.get("admin_notes", "")
 
         from ..services import plan_engine

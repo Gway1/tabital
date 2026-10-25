@@ -222,6 +222,7 @@ class AdminGetMerchantsResource(Resource):
                     "kyc_status": merchant.kyc_status or "pending",
                     "risk_level": risk_level_calc,
                     "status": merchant.status or "pending",
+                    "gateway_enabled": merchant.gateway_enabled is not False,
                     "total_gmv": float(total_gmv),
                     "total_transactions": total_transactions,
                     "active_plans": active_plans,
@@ -326,6 +327,7 @@ class AdminGetMerchantDetailResource(Resource):
                 "address": merchant.address,
                 "kyc_status": merchant.kyc_status or "pending",
                 "status": merchant.status,
+                "gateway_enabled": merchant.gateway_enabled is not False,
                 "created_at": merchant.created_at.isoformat()
                 if merchant.created_at
                 else None,
@@ -420,3 +422,78 @@ class AdminAdjustMerchantReserveResource(Resource):
         return {
             "error": "Merchant reserves aren't supported; this never changed anything."
         }, 410
+
+
+class AdminMerchantGatewayResource(Resource):
+    """Payment gateway (hosted checkout) for one merchant: see it and switch it off or on."""
+
+    @staticmethod
+    def _view(merchant):
+        from ..models.gateway import CheckoutSession, MerchantApiKey
+        from ..models.purchase_order import PurchaseOrder
+
+        return {
+            "merchant_id": merchant.id,
+            "enabled": merchant.gateway_enabled is not False,
+            "storefront_url": merchant.shop_url,
+            "webhook_url": merchant.webhook_url,
+            "active_api_keys": MerchantApiKey.query.filter_by(
+                merchant_id=merchant.id, status="active"
+            ).count(),
+            "sessions": CheckoutSession.query.filter_by(merchant_id=merchant.id).count(),
+            "orders": PurchaseOrder.query.filter(
+                PurchaseOrder.merchant_id == merchant.id,
+                PurchaseOrder.checkout_session_id.isnot(None),
+            ).count(),
+        }
+
+    @auth_required
+    def get(self, merchant_id):
+        """Gateway status and usage for a merchant"""
+        if current_user().role != "admin":
+            return {"error": "Unauthorized"}, 403
+        merchant = User.query.filter_by(id=merchant_id, role="merchant").first()
+        if not merchant:
+            return {"error": "Merchant not found"}, 404
+        return self._view(merchant), 200
+
+    @auth_required
+    def put(self, merchant_id):
+        """Switch a merchant's payment gateway on or off (management only, reason kept)"""
+        import json
+        from ..models.system_settings import SettingChange
+
+        admin = current_user()
+        if admin.role != "admin":
+            return {"error": "Unauthorized"}, 403
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data.get("enabled"), bool):
+            return {"error": "enabled must be true or false"}, 400
+        reason = (data.get("reason") or "").strip()
+        if len(reason) < 5:
+            return {
+                "error": "Give a reason (at least 5 characters). It's kept with the change."
+            }, 400
+        merchant = User.query.filter_by(id=merchant_id, role="merchant").first()
+        if not merchant:
+            return {"error": "Merchant not found"}, 404
+
+        was = merchant.gateway_enabled is not False
+        if was != data["enabled"]:
+            db.session.add(
+                SettingChange(
+                    setting_key=f"gateway_enabled:{merchant.id}",
+                    old_value=json.dumps(was),
+                    new_value=json.dumps(data["enabled"]),
+                    changed_by=admin.id,
+                    reason=reason[:500],
+                )
+            )
+            merchant.gateway_enabled = data["enabled"]
+            db.session.commit()
+        return {
+            "message": "Payment gateway "
+            + ("enabled" if data["enabled"] else "disabled")
+            + " for this merchant",
+            **self._view(merchant),
+        }, 200

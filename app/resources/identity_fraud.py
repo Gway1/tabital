@@ -29,6 +29,7 @@ class CustomerIdentityResource(Resource):
         user = current_user()
         if user.role != "customer":
             return {"error": "Unauthorized"}, 403
+        identity.expire_stale(user)
         check = identity.latest(user)
         if check and check.status == IdentityCheck.SUBMITTED:
             try:
@@ -90,6 +91,7 @@ class AdminIdentityChecksResource(Resource):
     def get(self):
         if not _admin():
             return {"error": "Unauthorized"}, 403
+        identity.expire_stale()
         q = IdentityCheck.query
         status = request.args.get("status", IdentityCheck.REVIEW)
         if status:
@@ -98,6 +100,7 @@ class AdminIdentityChecksResource(Resource):
         return {
             "checks": [c.to_dict(admin=True) for c in rows],
             "smileid_configured": smileid.is_configured(),
+            "smileid_sandbox": smileid.is_sandbox(),
             "biometric_required": identity.biometric_required(),
         }, 200
 

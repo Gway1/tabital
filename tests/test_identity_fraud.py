@@ -317,10 +317,10 @@ def test_admin_decides_a_review(env):
 
 
 def test_attempts_are_limited(env):
-    env["fake"].status = "error"
+    env["fake"].status = "block"
     for _ in range(3):
         check = start_and_submit(env)
-        webhook(env, "error", None, job_id=check.job_id)
+        webhook(env, "block", None, job_id=check.job_id)
         IdentityCheck.query.filter(IdentityCheck.id != check.id).update(
             {"job_id": None}
         )
@@ -621,3 +621,53 @@ def test_fraud_hold_stops_merchant_payouts(env):
         0
     ]
     assert batch.status == Settlement.ON_HOLD and "Fraud" in batch.hold_reason
+
+
+def test_smile_id_errors_dont_use_up_attempts(env):
+    env["fake"].status = "error"
+    for _ in range(4):  # more than identity_max_attempts
+        check = start_and_submit(env)
+        webhook(env, "error", None, job_id=check.job_id)
+        check.job_id = None  # free the job id for the next fake attempt
+        db.session.commit()
+    res = env["client"].post(
+        "/customer/identity/start", headers=env["cust_h"], json={"consent": True}
+    )
+    assert res.status_code == 200
+
+
+def test_a_submitted_check_with_no_result_goes_to_review(env):
+    check = start_and_submit(env)
+    check.created_at = datetime.utcnow() - timedelta(minutes=61)
+    db.session.commit()
+    res = env["client"].get("/customer/identity", headers=env["cust_h"])
+    assert res.status_code == 200 and res.get_json()["check"]["status"] == "review"
+    assert "No result" in res.get_json()["check"]["reasons"][0]
+    # The customer is no longer stuck behind "still being processed" once an admin decides
+    listing = env["client"].get(
+        "/admin/identity-checks", headers=env["admin_h"]
+    ).get_json()
+    assert [c["id"] for c in listing["checks"]] == [check.id]
+
+
+def test_webhook_without_a_final_smile_result_is_retried(env):
+    start_and_submit(env)
+    env["fake"].status = "processing"
+    res = webhook(env, "clear", {"full_name": "Ama Serwaa Mensah", "dob": "1990-01-15"})
+    assert res.status_code == 503
+    assert IdentityCheck.query.one().status == "submitted"
+
+
+def test_duplicate_card_found_whatever_the_stored_format(env):
+    other = make_user(
+        "customer",
+        "0240000399",
+        full_name="Kofi Boateng",
+        national_id="gha 123456789 0",
+        kyc_status="verified",
+    )
+    assert other.id != env["customer"].id
+    from app.services import identity
+
+    assert identity._verified_elsewhere(env["customer"], "GHA-123456789-0").id == other.id
+    assert identity._verified_elsewhere(env["customer"], "GHA-999999999-9") is None

@@ -9,6 +9,7 @@ from ..models.system_settings import SystemSetting
 from ..extensions import db
 from ..services import plan_engine, paystack, risk
 from datetime import datetime
+from sqlalchemy.exc import IntegrityError
 import json
 import uuid
 
@@ -98,139 +99,190 @@ class CustomerPurchaseResource(Resource):
         ):
             return {"error": "Merchant not available"}, 404
 
-        # Fraud checks (§9D/E, Phase 6): device, duplicate accounts, customer-merchant links
-        from ..services import fraud
-
-        fraud.record_device(current_customer)
-        fraud.check_duplicates(current_customer)
-        stop = fraud.check_purchase(current_customer, merchant)
-        if stop:
-            db.session.commit()  # keep the signals
-            return {"error": stop}, 403
-
-        # Employment verification (§9B, Phase 6): needed for a first credit purchase and for
-        # high-ticket orders (§13.1 D6)
-        if number_of_installments > 1 and not current_customer.employment_verified_at:
-            from ..models.instalment import InstalmentPlan
-
-            first_time = (
-                InstalmentPlan.query.filter_by(customer_id=current_customer.id).count()
-                == 0
-            )
-            high_ticket = float(product.price) * quantity >= float(
-                SystemSetting.get_value("high_ticket_threshold", 10000)
-            )
-            if first_time or high_ticket:
-                db.session.commit()
-                return {
-                    "error": "We need to verify your employment before this purchase",
-                    "reasons": [
-                        "Tabital confirms employment with your employer for first purchases"
-                        if first_time
-                        else "Tabital confirms employment for orders of GHS "
-                        f"{float(SystemSetting.get_value('high_ticket_threshold', 10000)):,.0f} or more",
-                        "Upload your staff ID or employment letter under Documents; our team will contact your employer",
-                    ],
-                    "code": "employment_verification_required",
-                }, 403
-
-        # Underwriting (§8, Phase 3): every purchase is decided and the decision is stored,
-        # including declines, so there's an audit trail.
-        from ..models.risk_assessment import RiskAssessment
-
-        decision, assessment = risk.evaluate(current_customer, RiskAssessment.PURCHASE)
-        if not decision.eligible:
-            db.session.commit()
-            return {
-                "error": "You're not eligible for a payment plan right now",
-                "reasons": decision.reasons,
-            }, 403
-
-        from ..services import merchant_fees
-
-        try:
-            plan = plan_engine.quote(
-                product.price,
-                quantity,
-                number_of_installments,
-                SystemSetting.get_value,
-                pay_in_4_dp_rate=decision.pay_in_4_dp_rate,
-                in_store=link is not None,
-                mdr=merchant_fees.rate_for(merchant),
-            )  # merchant side only (§6.1)
-        except plan_engine.PlanError as e:
-            db.session.commit()
-            return {"error": str(e)}, 400
-
-        # Spending limit: the purchase price must fit in the available limit
-        # (limit minus what's still owed). Full payment uses no credit.
-        if number_of_installments > 1 and plan["price"] > decision.available_limit:
-            db.session.commit()
-            return {
-                "error": f"This purchase is above your available limit of GHS {decision.available_limit:,.2f}",
-                "available_limit": float(decision.available_limit),
-                "credit_limit": float(decision.credit_limit),
-            }, 403
-
-        order = PurchaseOrder(
-            order_id=PurchaseOrder.generate_order_id(PurchaseOrder),
-            customer_id=current_customer.id,
-            merchant_id=merchant.id,
-            product_id=product.id,
-            product_name=product.name,
-            product_description=product.description or "",
-            product_price=float(plan_engine.money(product.price)),
-            product_image=product.main_image,
+        return place_order(
+            current_customer,
+            merchant=merchant,
+            price=product.price,
             quantity=quantity,
-            number_of_installments=number_of_installments,
-            down_payment_amount=float(plan["down_payment"]),
-            installment_amount=float(plan["installment_amount"]),
-            total_payable=float(plan["total_payable"]),
-            payment_schedule=json.dumps(plan_engine.schedule_to_json(plan["schedule"])),
-            # With Paystack, Payment 1 is collected now and the order only reaches the
-            # approval queue once it's paid. Without Paystack, it goes straight to approval
-            # and the admin records the down payment reference (manual fallback).
-            status="awaiting_payment" if paystack.is_configured() else "pending",
+            installments=number_of_installments,
             delivery_address=delivery_address,
-            risk_assessment_id=assessment.id,
-            terms_version=current_app.config.get("TERMS_VERSION"),
-            terms_accepted_at=datetime.utcnow(),
+            product=product,
+            link=link,
         )
 
-        db.session.add(order)
-        db.session.flush()
-        if link is not None:
-            order.payment_link_id = link.id
-            link.status = link.USED
-            link.used_by_order_id = order.id
+
+def place_order(
+    customer,
+    *,
+    merchant,
+    price,
+    quantity,
+    installments,
+    delivery_address,
+    product=None,
+    link=None,
+    session=None,
+    item_name=None,
+    item_description="",
+):
+    """Run the checks and create a purchase order. Returns (body, status_code).
+
+    Shared by the product catalogue, merchant payment links and the payment gateway, so every
+    purchase goes through the same fraud, employment, underwriting, limit and pricing rules.
+    `price` is a unit price taken from the database (product) or from a gateway checkout session,
+    never from the customer. The caller has already checked the customer's role, status, KYC
+    and terms, and the merchant's status.
+    """
+    number_of_installments = installments
+    # Fraud checks (§9D/E, Phase 6): device, duplicate accounts, customer-merchant links
+    from ..services import fraud
+
+    fraud.record_device(customer)
+    fraud.check_duplicates(customer)
+    stop = fraud.check_purchase(customer, merchant)
+    if stop:
+        db.session.commit()  # keep the signals
+        return {"error": stop}, 403
+
+    # Employment verification (§9B, Phase 6): needed for a first credit purchase and for
+    # high-ticket orders (§13.1 D6)
+    if number_of_installments > 1 and not customer.employment_verified_at:
+        from ..models.instalment import InstalmentPlan
+
+        first_time = (
+            InstalmentPlan.query.filter_by(customer_id=customer.id).count()
+            == 0
+        )
+        high_ticket = float(price) * quantity >= float(
+            SystemSetting.get_value("high_ticket_threshold", 10000)
+        )
+        if first_time or high_ticket:
+            db.session.commit()
+            return {
+                "error": "We need to verify your employment before this purchase",
+                "reasons": [
+                    "Tabital confirms employment with your employer for first purchases"
+                    if first_time
+                    else "Tabital confirms employment for orders of GHS "
+                    f"{float(SystemSetting.get_value('high_ticket_threshold', 10000)):,.0f} or more",
+                    "Upload your staff ID or employment letter under Documents; our team will contact your employer",
+                ],
+                "code": "employment_verification_required",
+            }, 403
+
+    # Underwriting (§8, Phase 3): every purchase is decided and the decision is stored,
+    # including declines, so there's an audit trail.
+    from ..models.risk_assessment import RiskAssessment
+
+    decision, assessment = risk.evaluate(customer, RiskAssessment.PURCHASE)
+    if not decision.eligible:
         db.session.commit()
+        return {
+            "error": "You're not eligible for a payment plan right now",
+            "reasons": decision.reasons,
+        }, 403
 
-        body = {
-            "order_id": order.order_id,
-            "id": order.id,
-            "status": order.status,
-            "due_now": float(plan["due_now"]),
-            "total_payable": float(plan["total_payable"]),
-            "payment_schedule": plan_engine.schedule_to_json(plan["schedule"]),
-        }
+    from ..services import merchant_fees
 
-        if order.status != "awaiting_payment":
-            body["message"] = "Order submitted for approval"
-            return body, 201
+    try:
+        plan = plan_engine.quote(
+            price,
+            quantity,
+            number_of_installments,
+            SystemSetting.get_value,
+            pay_in_4_dp_rate=decision.pay_in_4_dp_rate,
+            in_store=link is not None,
+            mdr=merchant_fees.rate_for(merchant),
+        )  # merchant side only (§6.1)
+    except plan_engine.PlanError as e:
+        db.session.commit()
+        return {"error": str(e)}, 400
 
-        try:
-            checkout = start_down_payment(order, current_customer)
-        except paystack.PaystackError:
-            # Order is kept; the customer can retry from My Orders
-            body[
-                "message"
-            ] = "Order saved, but we couldn't open the payment page. Pay the down payment from My Orders."
-            body["payment_error"] = True
-            return body, 201
+    # Spending limit: the purchase price must fit in the available limit
+    # (limit minus what's still owed). Full payment uses no credit.
+    if number_of_installments > 1 and plan["price"] > decision.available_limit:
+        db.session.commit()
+        return {
+            "error": f"This purchase is above your available limit of GHS {decision.available_limit:,.2f}",
+            "available_limit": float(decision.available_limit),
+            "credit_limit": float(decision.credit_limit),
+        }, 403
 
-        body.update(checkout)
-        body["message"] = "Pay the down payment to send your order for approval"
+    order = PurchaseOrder(
+        order_id=PurchaseOrder.generate_order_id(PurchaseOrder),
+        customer_id=customer.id,
+        merchant_id=merchant.id,
+        product_id=product.id if product else None,
+        product_name=product.name if product else item_name,
+        product_description=(product.description or "") if product else item_description,
+        product_price=float(plan_engine.money(price)),
+        product_image=product.main_image if product else None,
+        quantity=quantity,
+        number_of_installments=number_of_installments,
+        down_payment_amount=float(plan["down_payment"]),
+        installment_amount=float(plan["installment_amount"]),
+        total_payable=float(plan["total_payable"]),
+        payment_schedule=json.dumps(plan_engine.schedule_to_json(plan["schedule"])),
+        # With Paystack, Payment 1 is collected now and the order only reaches the
+        # approval queue once it's paid. Without Paystack, it goes straight to approval
+        # and the admin records the down payment reference (manual fallback).
+        status="awaiting_payment" if paystack.is_configured() else "pending",
+        delivery_address=delivery_address,
+        risk_assessment_id=assessment.id,
+        terms_version=current_app.config.get("TERMS_VERSION"),
+        terms_accepted_at=datetime.utcnow(),
+    )
+
+    db.session.add(order)
+    db.session.flush()
+    if link is not None:
+        order.payment_link_id = link.id
+        link.status = link.USED
+        link.used_by_order_id = order.id
+    if session is not None:
+        # Hosted checkout from the merchant's own website (payment gateway)
+        order.checkout_session_id = session.id
+        order.merchant_reference = session.merchant_reference
+        order.items_json = session.items
+        session.status = session.USED
+        session.order_id = order.id
+        session.customer_id = customer.id
+        from ..services import webhooks
+
+        webhooks.queue_order_event(order, "order.created")
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Two submits of the same checkout session raced: the other one won
+        db.session.rollback()
+        return {"error": "This checkout was already submitted"}, 409
+
+    body = {
+        "order_id": order.order_id,
+        "id": order.id,
+        "status": order.status,
+        "due_now": float(plan["due_now"]),
+        "total_payable": float(plan["total_payable"]),
+        "payment_schedule": plan_engine.schedule_to_json(plan["schedule"]),
+    }
+
+    if order.status != "awaiting_payment":
+        body["message"] = "Order submitted for approval"
         return body, 201
+
+    try:
+        checkout = start_down_payment(order, customer)
+    except paystack.PaystackError:
+        # Order is kept; the customer can retry from My Orders
+        body[
+            "message"
+        ] = "Order saved, but we couldn't open the payment page. Pay the down payment from My Orders."
+        body["payment_error"] = True
+        return body, 201
+
+    body.update(checkout)
+    body["message"] = "Pay the down payment to send your order for approval"
+    return body, 201
 
 
 def start_down_payment(order, customer):

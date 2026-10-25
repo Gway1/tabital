@@ -16,7 +16,7 @@ class MessageOutbox(db.Model):
         db.Integer, db.ForeignKey("users.id"), nullable=False, index=True
     )
     channel = db.Column(db.String(20), nullable=False)  # sms, whatsapp, in_app
-    to_address = db.Column(db.String(50))  # phone in +233 format for sms/whatsapp
+    to_address = db.Column(db.String(120))  # +233 phone for sms/whatsapp, or an email address
     template = db.Column(
         db.String(40), nullable=False
     )  # due_in_3, due_today, late_fee_charged, ...
@@ -25,6 +25,7 @@ class MessageOutbox(db.Model):
     status = db.Column(db.String(20), nullable=False, default=PENDING, index=True)
     attempts = db.Column(db.Integer, default=0)
     last_error = db.Column(db.String(255))
+    link = db.Column(db.String(500))  # in-app notification target, when it is not the instalments page
     provider = db.Column(db.String(30))
     provider_message_id = db.Column(db.String(100))
     # Prevents the same reminder going out twice (e.g. the daily job ran twice)

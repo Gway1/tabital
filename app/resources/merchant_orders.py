@@ -196,6 +196,9 @@ class MerchantUpdateDeliveryStatusResource(Resource):
 
                 order.status = "completed"
                 order.completed_at = datetime.now()
+                from ..services import webhooks
+
+                webhooks.queue_order_event(order, "order.delivered")
 
                 # The order's own transaction (older orders fall back to the old match)
                 transaction = (

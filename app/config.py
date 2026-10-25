@@ -31,6 +31,13 @@ class Config:
     # Public URL of the web app (used in payment links / QR codes)
     FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:4200")
 
+    # Payment gateway (hosted checkout for merchants' own websites)
+    GATEWAY_SESSION_MINUTES = int(os.getenv("GATEWAY_SESSION_MINUTES", "30"))
+    GATEWAY_POS_SESSION_MINUTES = int(os.getenv("GATEWAY_POS_SESSION_MINUTES", "15"))
+    GATEWAY_WEBHOOK_TIMEOUT = float(os.getenv("GATEWAY_WEBHOOK_TIMEOUT", "5"))
+    # Allow http:// storefront/webhook URLs and private addresses. Local development only.
+    GATEWAY_ALLOW_INSECURE_URLS = os.getenv("GATEWAY_ALLOW_INSECURE_URLS", "0") == "1"
+
     # Origins allowed to call the API from a browser
     CORS_ORIGINS = _csv(
         "CORS_ORIGINS", "http://localhost:4200,https://app.tabitalpay.com"
@@ -80,6 +87,11 @@ class Config:
     MNOTIFY_API_KEY = os.getenv("MNOTIFY_API_KEY")
     MNOTIFY_SENDER_ID = os.getenv("MNOTIFY_SENDER_ID", "TabitalPay")
     MNOTIFY_BASE_URL = os.getenv("MNOTIFY_BASE_URL", "https://api.mnotify.com/api")
+    # Hubtel (SMS_PROVIDER=hubtel). The sender ID must be approved in Hubtel.
+    HUBTEL_CLIENT_ID = os.getenv("HUBTEL_CLIENT_ID")
+    HUBTEL_CLIENT_SECRET = os.getenv("HUBTEL_CLIENT_SECRET")
+    HUBTEL_SENDER_ID = os.getenv("HUBTEL_SENDER_ID", "TabitalPay")
+    HUBTEL_BASE_URL = os.getenv("HUBTEL_BASE_URL", "https://smsc.hubtel.com/v1")
 
     # Smile ID identity checks (founder choice 2026-09-26). Sandbox until go-live.
     SMILEID_PARTNER_ID = os.getenv("SMILEID_PARTNER_ID")

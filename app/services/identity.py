@@ -15,7 +15,7 @@ When in doubt it goes to review; nothing borderline is auto-approved.
 import json
 import re
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ..extensions import db
 from ..models.identity import FraudSignal, IdentityCheck
@@ -27,6 +27,11 @@ from .sms import to_e164
 
 COUNTRY = "GH"
 PRODUCT = "biometric_kyc"
+# A submitted check with no result after this long goes to an admin, so a lost webhook can't leave
+# the customer stuck on "still being processed"
+STALE_AFTER = timedelta(minutes=60)
+# Smile ID errors (outages, bad captures) don't use up the customer's attempts, but are capped too
+MAX_ERRORS = 10
 
 
 class IdentityError(ValueError):
@@ -60,11 +65,43 @@ def split_name(full_name):
 
 
 def attempts_used(user):
+    """Finished checks that count against the limit. Errors are Smile ID's, not the customer's."""
     return IdentityCheck.query.filter(
         IdentityCheck.user_id == user.id,
         IdentityCheck.provider == "smileid",
-        IdentityCheck.status != IdentityCheck.STARTED,
+        IdentityCheck.status.notin_([IdentityCheck.STARTED, IdentityCheck.ERROR]),
     ).count()
+
+
+def errors_used(user):
+    return IdentityCheck.query.filter(
+        IdentityCheck.user_id == user.id,
+        IdentityCheck.provider == "smileid",
+        IdentityCheck.status == IdentityCheck.ERROR,
+    ).count()
+
+
+def expire_stale(user=None):
+    """Send submitted checks that never got a result to review. Commits. Returns how many."""
+    now = datetime.utcnow()
+    q = IdentityCheck.query.filter(
+        IdentityCheck.status == IdentityCheck.SUBMITTED,
+        IdentityCheck.created_at < now - STALE_AFTER,
+    )
+    if user is not None:
+        q = q.filter(IdentityCheck.user_id == user.id)
+    rows = q.all()
+    for check in rows:
+        check.status = IdentityCheck.REVIEW
+        check.completed_at = now
+        check.reasons_json = json.dumps(
+            [
+                f"No result from Smile ID after {int(STALE_AFTER.total_seconds() // 60)} minutes"
+            ]
+        )
+    if rows:
+        db.session.commit()
+    return len(rows)
 
 
 def latest(user):
@@ -98,6 +135,7 @@ def start(user, consent):
         raise IdentityError("Please agree to the identity check first")
     if user.kyc_status == "verified":
         raise IdentityError("Your identity is already verified")
+    expire_stale(user)
     open_check = IdentityCheck.query.filter(
         IdentityCheck.user_id == user.id,
         IdentityCheck.status.in_([IdentityCheck.SUBMITTED, IdentityCheck.REVIEW]),
@@ -107,6 +145,10 @@ def start(user, consent):
     if attempts_used(user) >= max_attempts():
         raise IdentityError(
             "You've used all your attempts. Please contact Tabital support."
+        )
+    if errors_used(user) >= MAX_ERRORS:
+        raise IdentityError(
+            "We couldn't complete your checks. Please contact Tabital support."
         )
     card = fraud.normalise_ghana_card(user.national_id)
     if not card:
@@ -138,6 +180,10 @@ def start(user, consent):
     }
     if current_app.config.get("SMILEID_CALLBACK_URL"):
         payload["callback_url"] = current_app.config["SMILEID_CALLBACK_URL"]
+    else:
+        current_app.logger.warning(
+            "SMILEID_CALLBACK_URL is not set: results only arrive when the customer's status is polled"
+        )
     token = smileid.mint_token(
         user_ref=reference,
         product=PRODUCT,
@@ -234,6 +280,13 @@ def dob_match(ours, id_fields):
 
 def apply_result(check, provider_status, result=None, message=None):
     """Turn a (verified) Smile ID result into our decision. Commits. Idempotent for final checks."""
+    # Lock the row so the webhook and a status poll can't both apply the same result
+    locked = (
+        IdentityCheck.query.filter_by(id=check.id).with_for_update().first()
+    )
+    if locked is not None:
+        db.session.refresh(locked)
+        check = locked
     if check.status in IdentityCheck.FINAL or (
         check.status == IdentityCheck.REVIEW and check.reviewed_at
     ):
@@ -314,9 +367,19 @@ def apply_result(check, provider_status, result=None, message=None):
 def _verified_elsewhere(user, card):
     if not card:
         return None
-    for other in User.query.filter(
-        User.id != user.id, User.role == "customer", User.kyc_status == "verified"
-    ).all():
+    # Compare the stored number with spaces and dashes stripped, in the database, rather than
+    # loading every verified customer. Re-checked with normalise_ghana_card on the few that match.
+    stripped = card.replace("-", "")
+    candidates = User.query.filter(
+        User.id != user.id,
+        User.role == "customer",
+        User.kyc_status == "verified",
+        db.func.upper(
+            db.func.replace(db.func.replace(User.national_id, "-", ""), " ", "")
+        )
+        == stripped,
+    ).all()
+    for other in candidates:
         if fraud.normalise_ghana_card(other.national_id) == card:
             return other
     return None
@@ -371,17 +434,19 @@ def handle_webhook(body, headers):
     if not check:
         return 200, "unknown job"  # acknowledge so Smile ID stops retrying
     # Trust but verify: the status must agree with Smile ID's own record of the job
+    # A result we can't confirm is not applied: answer 503 so Smile ID retries it
     if check.job_id:
         try:
             confirmed = smileid.job_status(check.job_id).get("status")
         except smileid.SmileIDError:
-            return 503, "could not confirm with Smile ID"  # Smile ID will retry
-        if (
-            confirmed
-            and confirmed not in ("processing",)
-            and confirmed != body.get("status")
-        ):
+            return 503, "could not confirm with Smile ID"
+        if confirmed in (None, "processing", "not_found"):
+            return 503, "Smile ID has no final result for this job yet"
+        if confirmed != body.get("status"):
             return 200, "status mismatch ignored"
+    elif body.get("status") in ("clear", "attention"):
+        # No job id on record yet (the browser hasn't reported it): wait for it rather than trust the body
+        return 503, "job not recorded yet"
     apply_result(check, body.get("status"), body)
     return 200, "ok"
 

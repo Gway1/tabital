@@ -1,5 +1,6 @@
-# resources/admin_orders.py
+from flask import Response
 from flask_restful import Resource, request
+from ..docs import STR, api_doc
 from flask_praetorian import auth_required, current_user
 from ..models.purchase_order import PurchaseOrder
 from ..models.user import User
@@ -7,6 +8,8 @@ from ..models.transaction import Transaction
 from ..extensions import db
 from ..services import fraud
 from datetime import datetime
+from io import StringIO
+import csv
 import json
 
 
@@ -16,6 +19,38 @@ def safe_str(v):
 
 def safe_float(v):
     return v if v is not None else 0.0
+
+
+def _search_orders_query(search):
+    """PurchaseOrder query narrowed by an order/product/customer/merchant search term."""
+    query = PurchaseOrder.query
+    search = (search or "").strip()
+    if search:
+        like = f"%{search}%"
+        user_ids = db.session.query(User.id).filter(
+            db.or_(
+                User.full_name.ilike(like),
+                User.business_name.ilike(like),
+                User.phone.ilike(like),
+            )
+        )
+        query = query.filter(
+            db.or_(
+                PurchaseOrder.order_id.ilike(like),
+                PurchaseOrder.product_name.ilike(like),
+                PurchaseOrder.customer_id.in_(user_ids),
+                PurchaseOrder.merchant_id.in_(user_ids),
+            )
+        )
+    return query
+
+
+def _csv_text(v):
+    """Neutralise spreadsheet formulas in free-text cells."""
+    v = safe_str(v)
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@"):
+        return "'" + v
+    return v
 
 
 class AdminGetOrdersResource(Resource):
@@ -31,25 +66,7 @@ class AdminGetOrdersResource(Resource):
         page = request.args.get("page", 1, type=int)
         limit = request.args.get("limit", 20, type=int)
 
-        query = PurchaseOrder.query
-        search = (request.args.get("search") or "").strip()
-        if search:
-            like = f"%{search}%"
-            user_ids = db.session.query(User.id).filter(
-                db.or_(
-                    User.full_name.ilike(like),
-                    User.business_name.ilike(like),
-                    User.phone.ilike(like),
-                )
-            )
-            query = query.filter(
-                db.or_(
-                    PurchaseOrder.order_id.ilike(like),
-                    PurchaseOrder.product_name.ilike(like),
-                    PurchaseOrder.customer_id.in_(user_ids),
-                    PurchaseOrder.merchant_id.in_(user_ids),
-                )
-            )
+        query = _search_orders_query(request.args.get("search"))
 
         # Counts for the whole queue (not just this page), so the tabs show real numbers
         counts = dict(
@@ -117,6 +134,93 @@ class AdminGetOrdersResource(Resource):
             "limit": limit,
             "total_pages": (total + limit - 1) // limit,
         }
+
+
+class AdminExportOrdersResource(Resource):
+    @api_doc(
+        "Download purchase orders as CSV (same filters as the orders list)",
+        query={
+            "status": (STR, "Only orders with this status"),
+            "search": (STR, "Match order ID, product, customer or merchant"),
+        },
+        produces="text/csv",
+    )
+    @auth_required
+    def get(self):
+        """Export purchase orders to CSV"""
+        current_admin = current_user()
+
+        if current_admin.role != "admin":
+            return {"error": "Unauthorized"}, 403
+
+        query = _search_orders_query(request.args.get("search"))
+        status = request.args.get("status", "")
+        if status:
+            query = query.filter(PurchaseOrder.status == status)
+
+        orders = query.order_by(PurchaseOrder.created_at.desc()).all()
+
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "Order ID",
+                "Customer Name",
+                "Customer Phone",
+                "Merchant",
+                "Product",
+                "Product Price",
+                "Quantity",
+                "Total Payable",
+                "Down Payment",
+                "Installment Amount",
+                "Installments",
+                "Status",
+                "Down Payment Status",
+                "Down Payment Reference",
+                "Refund Status",
+                "Delivery Address",
+                "Created At",
+            ]
+        )
+        for o in orders:
+            customer, merchant = o.customer, o.merchant
+            writer.writerow(
+                [
+                    o.order_id,
+                    _csv_text(
+                        (customer.full_name or customer.business_name)
+                        if customer
+                        else ""
+                    ),
+                    _csv_text(customer.phone if customer else ""),
+                    _csv_text(
+                        (merchant.business_name or merchant.full_name)
+                        if merchant
+                        else ""
+                    ),
+                    _csv_text(o.product_name),
+                    safe_float(o.product_price),
+                    o.quantity or 0,
+                    safe_float(o.total_payable),
+                    safe_float(o.down_payment_amount),
+                    safe_float(o.installment_amount),
+                    o.number_of_installments or 0,
+                    o.status,
+                    o.down_payment_status or "unpaid",
+                    safe_str(o.down_payment_reference),
+                    safe_str(o.refund_status),
+                    _csv_text(o.delivery_address),
+                    o.created_at.strftime("%Y-%m-%d %H:%M:%S") if o.created_at else "",
+                ]
+            )
+
+        filename = f"orders_{datetime.utcnow().strftime('%Y%m%d')}.csv"
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
 
 
 # class AdminApproveOrderResource(Resource):
@@ -187,6 +291,9 @@ class AdminRejectOrderResource(Resource):
         order.status = "rejected"
         order.rejected_at = datetime.now()
         order.admin_notes = reason
+        from ..services import webhooks
+
+        webhooks.queue_order_event(order, "order.rejected")
 
         # A down payment collected at checkout goes back to the customer
         refund = None

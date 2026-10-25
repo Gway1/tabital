@@ -1,8 +1,9 @@
 """SMS/WhatsApp providers behind one interface.
 
-The provider is chosen with SMS_PROVIDER. Until a Ghana provider is chosen (Hubtel, Arkesel,
-mNotify, ...; §13.1 D11), the default 'log' provider only writes the message to the server
-log, so reminders can be tested end to end without sending anything. To add a real provider,
+The provider is chosen with SMS_PROVIDER ('log', 'mnotify' or 'hubtel'). The same provider
+sends both the SMS and WhatsApp reminder channels (reminders.dispatch_pending). The default
+'log' provider only writes the message to the server log, so reminders can be tested end to
+end without sending anything. To add a real provider,
 implement `send(to, body) -> SendResult` and register it in PROVIDERS.
 """
 from dataclasses import dataclass
@@ -128,9 +129,87 @@ class MNotifyProvider:
         return SendResult(ok=True, provider=self.name, message_id=summary.get("_id"))
 
 
+class HubtelProvider:
+    """Hubtel Programmable SMS (https://developers.hubtel.com/).
+
+    POST https://smsc.hubtel.com/v1/messages/send, HTTP Basic auth (client id : client secret)
+    {"From": "<approved sender id, max 11 chars>", "To": "233241234567", "Content": "..."}
+    Success (HTTP 201): {"rate": 1.0, "messageId": "<id>", "status": 0, "networkId": "62002"}
+    Failure: status is non-zero and/or HTTP 4xx with a message.
+    """
+
+    name = "hubtel"
+    TIMEOUT_SECONDS = 20
+
+    def __init__(self):
+        cfg = current_app.config
+        self.client_id = cfg.get("HUBTEL_CLIENT_ID")
+        self.client_secret = cfg.get("HUBTEL_CLIENT_SECRET")
+        self.sender = (cfg.get("HUBTEL_SENDER_ID") or "").strip()
+        self.base_url = (
+            cfg.get("HUBTEL_BASE_URL") or "https://smsc.hubtel.com/v1"
+        ).rstrip("/")
+
+    def send(self, to, body):
+        import requests
+
+        if not self.client_id or not self.client_secret:
+            return SendResult(
+                ok=False,
+                provider=self.name,
+                error="HUBTEL_CLIENT_ID / HUBTEL_CLIENT_SECRET are not set",
+            )
+        if not self.sender or len(self.sender) > 11:
+            return SendResult(
+                ok=False,
+                provider=self.name,
+                error="HUBTEL_SENDER_ID must be set and at most 11 characters",
+            )
+        e164 = to_e164(to)
+        if not e164:
+            return SendResult(
+                ok=False, provider=self.name, error=f"Invalid Ghana phone number: {to}"
+            )
+
+        payload = {
+            "From": self.sender,
+            "To": e164.lstrip("+"),  # Hubtel wants 233241234567, no plus
+            "Content": body,
+        }
+        try:
+            res = requests.post(
+                f"{self.base_url}/messages/send",
+                auth=(self.client_id, self.client_secret),
+                json=payload,
+                timeout=self.TIMEOUT_SECONDS,
+            )
+            data = res.json()
+        except (requests.RequestException, ValueError) as e:
+            return SendResult(
+                ok=False,
+                provider=self.name,
+                error=f"Hubtel unreachable: {type(e).__name__}",
+            )
+
+        message_id = data.get("messageId") or data.get("MessageId")
+        status = data.get("status", data.get("Status"))
+        if res.status_code >= 400 or (status not in (None, 0, "0")):
+            detail = data.get("message") or data.get("Message") or "send failed"
+            return SendResult(
+                ok=False,
+                provider=self.name,
+                message_id=message_id,
+                error=f"Hubtel {status if status is not None else res.status_code}: {detail}"[
+                    :255
+                ],
+            )
+        return SendResult(ok=True, provider=self.name, message_id=message_id)
+
+
 PROVIDERS = {
     "log": LogProvider,
     "mnotify": MNotifyProvider,
+    "hubtel": HubtelProvider,
 }
 
 

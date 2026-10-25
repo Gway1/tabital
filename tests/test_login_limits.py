@@ -2,6 +2,7 @@
 reset codes, sign-ups; a password reset clears a lock; no public "does this account exist" lookup."""
 from datetime import datetime, timedelta
 
+from app.services.auth_service import _digest
 from app.extensions import db, guard
 from app.models.login_attempt import LoginAttempt
 from app.models.user import User
@@ -111,7 +112,7 @@ def test_password_reset_clears_the_lock(app_ctx):  # noqa: F811
     (
         user.reset_token,
         user.reset_token_expiry,
-    ) = "tok-123", datetime.utcnow() + timedelta(minutes=10)
+    ) = _digest("tok-123"), datetime.utcnow() + timedelta(minutes=10)
     db.session.commit()
     assert (
         client.post(

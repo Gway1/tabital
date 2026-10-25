@@ -143,20 +143,19 @@ def queue_due_reminders(today=None):
     return queued
 
 
-def dispatch_pending(limit=500):
+def dispatch_pending(limit=500, ids=None):
     """Send pending messages. Failures are recorded and retried up to 3 times. Commits."""
     from ..models.notifications import Notifications
     from . import sms
 
     sender = None
     sent = 0
-    rows = (
-        MessageOutbox.query.filter(
-            MessageOutbox.status == MessageOutbox.PENDING, MessageOutbox.attempts < 3
-        )
-        .limit(limit)
-        .all()
+    query = MessageOutbox.query.filter(
+        MessageOutbox.status == MessageOutbox.PENDING, MessageOutbox.attempts < 3
     )
+    if ids is not None:  # send just these rows now (e.g. a POS checkout link)
+        query = query.filter(MessageOutbox.id.in_(ids))
+    rows = query.limit(limit).all()
     for msg in rows:
         msg.attempts = (msg.attempts or 0) + 1
         try:
@@ -167,13 +166,19 @@ def dispatch_pending(limit=500):
                     user_role="customer",
                     title=msg.title or "Tabital Pay",
                     message=msg.body,
-                    type="reminder",
-                    link="/customer/instalments",
+                    type="order" if msg.link else "reminder",
+                    link=msg.link or "/customer/instalments",
                     action_text="Pay now",
                 )
                 db.session.add(n)
                 msg.provider = "in_app"
                 ok, error, message_id = True, None, n.notification_id
+            elif msg.channel == "email":
+                from . import email
+
+                result = email.send(msg.to_address, msg.title or "Tabital Pay", msg.body)
+                msg.provider = result.provider
+                ok, error, message_id = result.ok, result.error, result.message_id
             else:
                 sender = sender or sms.provider()
                 result = sender.send(msg.to_address, msg.body)

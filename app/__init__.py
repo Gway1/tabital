@@ -17,6 +17,7 @@ from .models import pii_access as _pii_access_model  # noqa: F401
 from .models import login_attempt as _login_attempt_model  # noqa: F401
 from .models import part_payment as _part_payment_model  # noqa: F401
 from .models import payment_claim as _payment_claim_model  # noqa: F401
+from .models import gateway as _gateway_model  # noqa: F401
 from .routes import register_routes
 
 
@@ -37,7 +38,7 @@ def create_app():
 
     CORS(
         app,
-        resources={r"/*": {"origins": app.config["CORS_ORIGINS"]}},
+        origins=app.config["CORS_ORIGINS"],
         allow_headers=[
             "Content-Type",
             "Authorization",
@@ -52,6 +53,12 @@ def create_app():
     ma.init_app(app)
     mail.init_app(app)
     guard.init_app(app, User)
+    if not app.config.get("TESTING"):
+        from .services import smileid
+
+        with app.app_context():
+            for problem in smileid.config_warnings():
+                app.logger.warning("Smile ID: %s", problem)
     Migrate(app, db)
 
     register_routes(app)
@@ -93,7 +100,7 @@ def register_pii_masking(app):
 def register_access_control(app):
     """Management Access (services/access.py): checked once for every request an admin makes."""
     from flask import request
-    from .services import access
+    from .services import access, auth_service
 
     @app.before_request
     def _management_access():
@@ -110,6 +117,12 @@ def register_access_control(app):
             return {
                 "error": "Your account isn't active. Please contact Tabital.",
                 "code": "account_inactive",
+            }, 401
+        # A password reset or change signs out the sessions started before it
+        if auth_service.session_predates_password_change(user, data.get("iat")):
+            return {
+                "error": "Your session has ended. Please sign in again.",
+                "code": "session_expired",
             }, 401
         if user.role != "admin" or access.is_management(user):
             return None
@@ -230,6 +243,19 @@ def register_commands(app):
         )
         for key, value in summary.to_dict().items():
             click.echo(f"{key}: {value}")
+
+        from .services import webhooks
+
+        sent, failed = webhooks.deliver_due()
+        click.echo(f"merchant_webhooks_sent: {sent}")
+
+    @app.cli.command("deliver-webhooks")
+    def deliver_webhooks_command():
+        """Send queued merchant gateway webhooks (and retry failed ones). Run every minute."""
+        from .services import webhooks
+
+        sent, failed = webhooks.deliver_due()
+        click.echo(f"sent: {sent}, failed or retrying: {failed}")
 
     @app.cli.command("ledger-backfill")
     @click.option(

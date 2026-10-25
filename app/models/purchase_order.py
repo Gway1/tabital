@@ -55,6 +55,12 @@ class PurchaseOrder(db.Model):
     payment_link_id = db.Column(
         db.Integer, db.ForeignKey("payment_links.id"), nullable=True
     )
+    # Order placed through the merchant payment gateway (hosted checkout)
+    checkout_session_id = db.Column(
+        db.Integer, db.ForeignKey("checkout_sessions.id"), nullable=True, unique=True
+    )
+    merchant_reference = db.Column(db.String(100))  # the merchant's own order number
+    items_json = db.Column(db.Text)  # cart snapshot sent by the merchant's site
     # The underwriting decision this order was accepted under
     risk_assessment_id = db.Column(
         db.Integer, db.ForeignKey("risk_assessments.id"), nullable=True
