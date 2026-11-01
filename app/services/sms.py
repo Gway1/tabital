@@ -98,13 +98,18 @@ class MNotifyProvider:
                 json=payload,
                 timeout=self.TIMEOUT_SECONDS,
             )
-            data = res.json()
-        except (requests.RequestException, ValueError) as e:
+            try:
+                data = res.json()
+            except ValueError:
+                data = {"message": (res.text or "")[:120]}  # e.g. an HTML error page
+        except requests.RequestException as e:
             return SendResult(
                 ok=False,
                 provider=self.name,
                 error=f"mNotify unreachable: {type(e).__name__}",
             )
+        if not isinstance(data, dict):
+            data = {"message": str(data)[:120]}
 
         summary = data.get("summary") or {}
         if (
@@ -115,7 +120,7 @@ class MNotifyProvider:
             return SendResult(
                 ok=False,
                 provider=self.name,
-                error=f"mNotify {data.get('code') or res.status_code}: {data.get('message') or 'send failed'}"[
+                error=f"mNotify {data.get('code') or res.status_code}: {data.get('message') or data.get('error') or res.reason or 'send failed'}"[
                     :255
                 ],
             )
